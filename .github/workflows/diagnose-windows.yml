@@ -1,0 +1,61 @@
+name: Diagnose Windows Office without rebuild
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Existing diagnostic Windows build run ID
+        required: true
+permissions:
+  actions: read
+  contents: read
+jobs:
+  diagnose:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Prepare source environment
+        run: python -m pip install -r requirements.lock
+      - uses: actions/download-artifact@v4
+        with:
+          name: format-hub-windows-x64-v1.1.0
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          path: diagnose-artifact
+      - name: Verify and extract existing binary artifact
+        shell: pwsh
+        run: |
+          @'
+          from pathlib import Path
+          import hashlib
+          import bootstrap
+          archives=list(Path('diagnose-artifact').rglob('*.zip'))
+          assert len(archives)==1
+          archive=archives[0]
+          assert hashlib.sha256(archive.read_bytes()).hexdigest()==archive.with_suffix('.sha256').read_text().split()[0]
+          bootstrap.extract_verified(archive,Path('diagnose-bundle'),3*1024**3,40000)
+          '@ | python -
+      - name: Prepare only private Office engine
+        run: python bootstrap.py --engine windows-office
+      - name: Compare source, frozen and direct conversion
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem diagnose-bundle -Filter format-hub.exe -Recurse | Select-Object -First 1
+          New-Item -ItemType Directory -Force "$($exe.Directory.FullName)/runtime/libreoffice" | Out-Null
+          Copy-Item runtime/libreoffice/* "$($exe.Directory.FullName)/runtime/libreoffice/" -Recurse
+          $env:SOFFICE = "$pwd/runtime/libreoffice/program/soffice.com"
+          python packaging/diagnose_windows.py "$($exe.FullName)" --report packaging/windows-differential.json 2>&1 | Tee-Object packaging/windows-differential.log
+          if ($LASTEXITCODE -ne 0) { throw 'Differential diagnostic failed; inspect retained logs' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: format-hub-windows-office-diagnostic
+          path: |
+            packaging/windows-differential.json
+            packaging/windows-differential.log
+          if-no-files-found: warn
