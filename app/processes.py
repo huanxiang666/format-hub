@@ -8,6 +8,15 @@ _dll_lock = threading.Lock()
 
 
 def run_external(args, **kwargs):
+    if sys.platform == 'darwin' and getattr(sys, 'frozen', False):
+        environment = dict(kwargs.pop('env', os.environ))
+        for key in ('DYLD_LIBRARY_PATH', 'DYLD_FRAMEWORK_PATH', 'DYLD_FALLBACK_LIBRARY_PATH'):
+            original = environment.pop(key + '_ORIG', None)
+            if original is None:
+                environment.pop(key, None)
+            else:
+                environment[key] = original
+        return subprocess.run(args, env=environment, **kwargs)
     if sys.platform != 'win32' or not getattr(sys, 'frozen', False):
         return subprocess.run(args, **kwargs)
     import ctypes

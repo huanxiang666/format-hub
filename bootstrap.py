@@ -43,6 +43,8 @@ class HTTPSRedirect(urllib.request.HTTPRedirectHandler):
 
 def download_verified(source, destination, proxy=None):
     """A failed download never replaces the destination; redirects stay HTTPS."""
+    if os.environ.get('FORMAT_HUB_OFFLINE') == '1':
+        raise RuntimeError('离线模式已禁止下载；请使用完整发行包内置引擎')
     destination = Path(destination)
     if destination.is_symlink():
         raise ValueError('下载目标为符号链接')
@@ -182,6 +184,8 @@ def verify_windows_office(office, profile):
 
 def install_engine(engine_id, root=ROOT, proxy=None):
     """Install a fixed manifest engine. No caller-provided URL or command is accepted."""
+    if os.environ.get('FORMAT_HUB_OFFLINE') == '1':
+        raise RuntimeError('离线模式已禁止安装下载引擎')
     root = Path(root).resolve()
     source = manifest(root)['engines'][engine_id]
     if source['platform'] not in (sys.platform, 'any'):
@@ -230,6 +234,31 @@ def install_engine(engine_id, root=ROOT, proxy=None):
                 if any(p.is_symlink() for p in paths) or sum(p.stat().st_size for p in paths if p.is_file()) > source['max_extract_bytes'] or len(paths) > 30000:
                     raise ValueError('MSI 管理安装结果超过预算或含链接')
                 print(verify_windows_office(unpacked, staging / 'verification-profile'), flush=True)
+            elif source['archive'] == 'dmg-app':
+                if sys.platform != 'darwin':
+                    raise RuntimeError('DMG 私有展开仅支持 macOS')
+                import platform
+                if platform.machine().lower() != source['machine']:
+                    raise RuntimeError('LibreOffice DMG 架构与当前 runner 不匹配')
+                mount = staging / 'mount'
+                mount.mkdir()
+                subprocess.run(['hdiutil', 'attach', '-readonly', '-nobrowse', '-mountpoint', str(mount), str(archive)], check=True, capture_output=True, timeout=120)
+                try:
+                    app = mount / 'LibreOffice.app'
+                    subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)], check=True, capture_output=True, timeout=120)
+                    subprocess.run(['ditto', str(app), str(unpacked)], check=True, timeout=300)
+                finally:
+                    subprocess.run(['hdiutil', 'detach', str(mount)], check=True, capture_output=True, timeout=120)
+                paths = list(unpacked.rglob('*'))
+                if sum(p.stat().st_size for p in paths if p.is_file() and not p.is_symlink()) > source['max_extract_bytes']:
+                    raise ValueError('DMG 展开结果超过预算')
+                if any(p.is_symlink() and not p.resolve().is_relative_to(unpacked.resolve()) for p in paths):
+                    raise ValueError('LibreOffice app 含指向包外的链接')
+                subprocess.run(['codesign', '--verify', '--deep', '--strict', str(unpacked)], check=True, capture_output=True, timeout=120)
+                result = subprocess.run([str(unpacked / 'Contents/MacOS/soffice'), '--headless', f'-env:UserInstallation={(staging / "verification-profile").as_uri()}', '--version'], check=True, capture_output=True, timeout=60)
+                if b'LibreOffice' not in result.stdout:
+                    raise RuntimeError('LibreOffice macOS 版本校验失败')
+                print(result.stdout.decode('utf-8', errors='replace').strip(), flush=True)
             elif source['archive'] == 'file':
                 unpacked.mkdir()
                 shutil.copy2(archive, unpacked / source['filename'])

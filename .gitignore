@@ -30,3 +30,10 @@ packaging/*smoke*.log
 packaging/*build*.log
 packaging/*audit*.json
 packaging/release-result.json
+packaging/*published*.json
+runtime/LibreOffice.app/
+runtime/libreoffice/
+runtime/dwg/
+runtime/native/
+*.dmg
+*.pkg
