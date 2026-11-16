@@ -63,7 +63,8 @@ def _soffice() -> str | None:
     if cached and time.monotonic()-cached[0]<10:
         return program if cached[1] else None
     try:
-        result=subprocess.run([program,'--version'],stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=8)
+        from app.processes import run_external
+        result=run_external([program,'--version'],stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=8)
         valid=result.returncode==0 and b'LibreOffice' in result.stdout
     except (OSError,subprocess.TimeoutExpired):
         valid=False
