@@ -16,6 +16,7 @@ import shutil
 import tarfile
 import time
 import subprocess
+import sys
 import tempfile
 import uuid
 import zipfile
@@ -583,8 +584,11 @@ def _office(files,out,options):
             raise ValueError(f'Office 输入格式不受支持：{src.suffix}')
         target=_target(options,group,'pdf')
         _office_preflight(src)
-        with tempfile.TemporaryDirectory(prefix='format-hub-office-') as temp:
-            temp=Path(temp)
+        # LibreOffice adds deep internal profile paths; Windows job directories can
+        # exceed its MAX_PATH limits even when the input itself remains readable.
+        temporary_options = {'prefix': 'fh-', 'dir': str(Path(os.environ['TEMP']).resolve())} if sys.platform == 'win32' else {'prefix': 'format-hub-office-'}
+        with tempfile.TemporaryDirectory(**temporary_options) as temp:
+            temp=Path(temp).resolve()
             spec=target
             if target=='pdf':
                 spec='pdf:'+('writer_pdf_Export' if group is OFFICE_GROUPS[0] else 'calc_pdf_Export' if group is OFFICE_GROUPS[1] else 'impress_pdf_Export')
