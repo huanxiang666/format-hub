@@ -7,8 +7,7 @@
       "platform": "win32",
       "filename": "LibreOffice_26.2.7_Win_x86-64.msi",
       "urls": [
-        "https://download.documentfoundation.org/libreoffice/stable/26.2.7/win/x86_64/LibreOffice_26.2.7_Win_x86-64.msi",
-        "https://downloadarchive.documentfoundation.org/libreoffice/old/26.2.7.2/win/x86_64/LibreOffice_26.2.7.2_Win_x86-64.msi"
+        "https://download.documentfoundation.org/libreoffice/stable/26.2.7/win/x86_64/LibreOffice_26.2.7_Win_x86-64.msi"
       ],
       "sha256": "480fecf759fc6393bd614fbf43753eb95a8198fc1a065d41b727e3b664cd1e59",
       "checksum_source": "https://download.documentfoundation.org/libreoffice/stable/26.2.7/win/x86_64/LibreOffice_26.2.7_Win_x86-64.msi.sha256",

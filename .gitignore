@@ -25,3 +25,8 @@ release/
 .runtime-cache/
 service.env*
 .gau-allowlist
+packaging/*smoke*.json
+packaging/*smoke*.log
+packaging/*build*.log
+packaging/*audit*.json
+packaging/release-result.json

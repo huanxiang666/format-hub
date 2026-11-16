@@ -17,7 +17,7 @@ import time
 import zipfile
 
 ROOT = Path(__file__).resolve().parent
-APPROVED_TOP = ('run.py', 'bootstrap.py', 'engine-sources.json', 'requirements.txt', 'requirements.lock', 'THIRD-PARTY-NOTICES.md', 'LICENSE')
+APPROVED_TOP = ('run.py', 'bootstrap.py', 'engine-sources.json', 'requirements.txt', 'requirements.lock', 'THIRD-PARTY-NOTICES.md', 'LICENSE', 'README.md')
 MODULES = ('uvicorn', 'fastapi', 'starlette', 'multipart', 'PIL', 'pymupdf', 'fitz', 'pdf2docx', 'docx', 'openpyxl', 'ezdxf', 'cairosvg', 'defusedxml', 'imageio_ffmpeg')
 SOFFICE_SH = '''#!/bin/sh
 set -eu
@@ -61,7 +61,7 @@ def main():
     if system == 'macos':
         parser.error('macOS 请使用源码 bootstrap；尚无实机二进制验证')
     stamp = time.strftime('%Y%m%d-%H%M%S')
-    name = f'format-hub-{system}-x64-{stamp}'
+    name = f'format-hub-v1.1.0-{system}-x64-{stamp}'
     if platform.machine().lower() not in ('x86_64', 'amd64'):
         parser.error('此构建目标仅为 x64')
     with tempfile.TemporaryDirectory(prefix='format-hub-build-') as temporary:
