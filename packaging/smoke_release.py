@@ -25,7 +25,9 @@ def main():
     report = {'binary': str(binary), 'checks': []}
     with tempfile.TemporaryDirectory(prefix='format-hub-release-smoke-') as temporary:
         temporary = Path(temporary)
-        help_result = subprocess.run([str(binary), '--help'], cwd=temporary, capture_output=True, text=True, timeout=20, check=True)
+        help_result = subprocess.run([str(binary), '--help'], cwd=temporary, capture_output=True, text=True, errors='replace', timeout=20, check=False)
+        if help_result.returncode:
+            raise RuntimeError(f'Frozen --help exited {help_result.returncode}\nstdout:\n{help_result.stdout}\nstderr:\n{help_result.stderr}')
         assert '--port' in help_result.stdout
         report['checks'].append({'help': help_result.stdout})
         for filename, flag in [('ffmpeg.exe' if os.name == 'nt' else 'ffmpeg', '-version'), ('dwg/dwg2dxf.exe' if os.name == 'nt' else 'dwg2dxf', '--version')]:

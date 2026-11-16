@@ -81,11 +81,15 @@ jobs:
           $bundle = Get-ChildItem packaging/dist -Directory | Select-Object -First 1
           New-Item -ItemType Directory -Force "$($bundle.FullName)/runtime/libreoffice" | Out-Null
           Copy-Item runtime/libreoffice/* "$($bundle.FullName)/runtime/libreoffice/" -Recurse
-          python packaging/smoke_release.py "$($bundle.FullName)/format-hub.exe" --office --report packaging/windows-smoke.json
-          if ($LASTEXITCODE -ne 0) { throw 'Frozen smoke failed' }
+          & "$($bundle.FullName)/format-hub.exe" --help 2>&1 | Tee-Object packaging/windows-frozen-help.log
+          $helpExitCode = $LASTEXITCODE
+          if ($helpExitCode -ne 0) { Write-Warning "Direct frozen --help exited $helpExitCode; collecting detailed smoke diagnostics" }
+          python packaging/smoke_release.py "$($bundle.FullName)/format-hub.exe" --office --report packaging/windows-smoke.json 2>&1 | Tee-Object packaging/windows-smoke.log
+          if ($LASTEXITCODE -ne 0) { throw 'Frozen smoke failed; see windows-smoke.log and windows-frozen-help.log' }
           # The archive was generated before this test-only Office copy, keeping the public
           # package compact. First launch downloads the exact same verified private image.
       - name: Upload build artifacts for main-agent review
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: format-hub-windows-x64-v1.1.0
@@ -95,4 +99,6 @@ jobs:
             packaging/dist/*.sha256
             packaging/dist/*.json
             packaging/windows-smoke.json
-          if-no-files-found: error
+            packaging/windows-smoke.log
+            packaging/windows-frozen-help.log
+          if-no-files-found: warn

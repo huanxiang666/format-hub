@@ -1,0 +1,59 @@
+name: Publish verified Windows artifact
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful Windows build run ID
+        required: true
+permissions:
+  actions: read
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate upstream build
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RUN_ID: ${{ inputs.run_id }}
+        run: |
+          [[ "$BUILD_RUN_ID" =~ ^[0-9]+$ ]]
+          gh api "repos/${{ github.repository }}/actions/runs/$BUILD_RUN_ID" > /tmp/build.json
+          python - <<'PY'
+          import json
+          run=json.load(open('/tmp/build.json'))
+          assert run['conclusion']=='success' and run['status']=='completed'
+          assert run['path']=='.github/workflows/release.yml'
+          print('Verified successful build',run['id'],run['head_sha'])
+          PY
+      - uses: actions/download-artifact@v4
+        with:
+          name: format-hub-windows-x64-v1.1.0
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          path: release
+      - name: Validate artifact and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib,json
+          root=Path('release')
+          smoke=list(root.rglob('windows-smoke.json'))
+          assert len(smoke)==1
+          data=json.loads(smoke[0].read_text())
+          operations={c.get('operation'):c for c in data['checks'] if 'operation' in c}
+          for name in ['image_convert','cad_convert','office_convert','media_audio']:
+              assert operations[name]['state']=='succeeded'
+          archives=list(root.rglob('*.zip'))
+          assert len(archives)==1
+          archive=archives[0]
+          checksum=archive.with_suffix('.sha256')
+          expected=checksum.read_text().split()[0]
+          actual=hashlib.sha256(archive.read_bytes()).hexdigest()
+          assert actual==expected
+          print('Verified Windows archive',archive.name,archive.stat().st_size,actual)
+          PY
+          mapfile -d '' files < <(find release -type f \( -name '*.zip' -o -name '*.sha256' -o -name 'windows-smoke.json' \) -print0)
+          gh release upload v1.1.0 "${files[@]}" --repo "${{ github.repository }}"
