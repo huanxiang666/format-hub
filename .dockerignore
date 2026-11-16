@@ -1,0 +1,12 @@
+.venv
+.git
+.pytest_cache
+**/__pycache__
+data
+evidence
+service.env
+runtime/office
+runtime/packages
+runtime/dwg2dxf
+runtime/liboffice-ipc.so
+*.zip

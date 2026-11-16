@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#102e46">
+  <meta name="description" content="格式工坊，面向团队的文件格式转换工作台。">
+  <title>格式工坊 · 团队文件转换工作台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='10' fill='%23102e46'/%3E%3Cpath d='M10 12h18v6H16v10h-6z' fill='%2341d4df'/%3E%3Cpath d='M20 22h10v6H20z' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/editor.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#workspace">跳到转换区域</a>
+  <svg class="svg-sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 20V4m-6 6 6-6 6 6"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v16m-6-6 6 6 6-6"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v1"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 7a7 7 0 0 1 11.5-2L20 8M4 16l2.4 3A7 7 0 0 0 18 17"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6z"/><path d="m8 12 3 3 5-6"/></symbol>
+    <symbol id="i-archive" viewBox="0 0 24 24"><path d="M4 8h16v12H4zM3 3h18v5H3zM9 12h6"/></symbol>
+    <symbol id="i-audio" viewBox="0 0 24 24"><path d="M9 18V5l11-2v13M9 9l11-2"/><ellipse cx="6" cy="18" rx="3" ry="3"/><ellipse cx="17" cy="16" rx="3" ry="3"/></symbol>
+  </svg>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="格式工坊首页"><span class="brand-mark" aria-hidden="true"><span></span><span></span></span><span>格式工坊<small>团队文件转换工作台</small></span></a>
+    <div class="topbar-right"><span class="environment"><span class="status-dot" id="health-dot"></span><span id="health-text">正在连接服务</span></span><button class="button button-quiet" id="session-button" hidden>退出登录</button><a class="queue-shortcut" href="#queue-panel"><svg><use href="#i-clock"/></svg><span>任务队列</span><span class="queue-count" id="header-active-count">0</span></a></div>
+  </header>
+  <div class="app-layout">
+    <aside class="sidebar" aria-label="工具导航">
+      <div class="sidebar-heading">工具箱 <span id="tool-total">—</span></div>
+      <label class="search-box"><svg aria-hidden="true"><use href="#i-search"/></svg><input id="tool-search" type="search" placeholder="搜索工具或格式" aria-label="搜索工具或格式" autocomplete="off"><kbd aria-hidden="true">/</kbd></label>
+      <nav id="categories" aria-label="工具分类"><div class="muted sidebar-loading">正在读取分类…</div></nav>
+      <div class="sidebar-bottom"><svg aria-hidden="true"><use href="#i-shield"/></svg><div><strong>专注当前会话</strong><p>转换记录与文件仅在当前会话中可见。</p></div></div>
+      <div class="sidebar-version" id="version-label">格式工坊</div>
+    </aside>
+    <main id="main-content">
+      <section class="page-heading"><div><p class="page-kicker">文件处理，从容有序</p><h1>把格式交给工坊，<br class="mobile-break">把时间留给工作。</h1><p class="page-subtitle">选好工具，放入文件。转换进度和下载结果都在这里。</p></div><div class="heading-seal" aria-hidden="true"><svg><use href="#i-file"/></svg><svg><use href="#i-arrow"/></svg><svg><use href="#i-file"/></svg></div></section>
+      <div id="global-message" class="notice" role="status" hidden></div>
+      <section class="login-panel surface" id="login-panel" hidden aria-labelledby="login-title"><span class="section-icon"><svg aria-hidden="true"><use href="#i-shield"/></svg></span><div><h2 id="login-title">进入团队工作台</h2><p>此工作台已启用访问凭证。输入团队提供的凭证后开始转换。</p><form id="login-form"><label class="sr-only" for="access-token">访问凭证</label><input id="access-token" name="token" type="password" placeholder="输入访问凭证" autocomplete="current-password" required><button class="button button-primary" id="login-submit" type="submit">登录工作台</button></form><p id="login-error" class="field-error" role="alert" hidden></p></div></section>
+      <div class="workspace-layout">
+        <div class="work-column">
+          <section class="tool-section" aria-labelledby="tools-title"><div class="section-heading"><div><h2 id="tools-title">全部工具</h2><p id="tools-summary">正在读取可用转换工具</p></div><span class="count-label" id="filtered-count">—</span></div><div id="tool-list" class="tool-list" aria-live="polite"><div class="loading-state"><span class="spinner" aria-hidden="true"></span>正在加载工具目录…</div></div></section>
+          <section id="workspace" class="converter surface" aria-labelledby="converter-title" tabindex="-1">
+            <div class="converter-heading"><span id="converter-icon" class="section-icon"><svg aria-hidden="true"><use href="#i-file"/></svg></span><div><h2 id="converter-title">选择一个转换工具</h2><p id="converter-description">从上方工具列表开始。</p></div><span class="availability" id="tool-availability" hidden></span></div>
+            <div id="unavailable-message" class="notice notice-warning" hidden></div>
+            <form id="conversion-form" hidden>
+              <div class="step-label"><span>1</span><h3>添加源文件</h3><span class="step-meta" id="accepted-formats"></span></div>
+              <div id="drop-zone" class="drop-zone"><svg class="upload-icon" aria-hidden="true"><use href="#i-upload"/></svg><h4>将文件拖到这里</h4><p id="file-picker-help">或从电脑中选择文件，批量处理更省心</p><label class="button button-secondary file-picker" for="file-input"><svg aria-hidden="true"><use href="#i-upload"/></svg>选择文件</label><input id="file-input" type="file" class="sr-only"><span class="upload-limits" id="upload-limits">正在读取上传限制</span></div>
+              <div class="files-heading" id="files-heading" hidden><span id="files-summary"></span><button type="button" class="text-button" id="clear-files">清空文件</button></div>
+              <ol id="file-list" class="file-list" aria-label="待转换文件，顺序与合并顺序一致"></ol>
+              <p id="file-error" class="field-error" role="alert" hidden></p>
+              <section id="pdf-inspection" class="pdf-inspection" aria-label="PDF 页数与页面预览" hidden><div class="editor-heading"><h3>PDF 页数与页面预览</h3><button id="inspect-retry" class="text-button" type="button">重新读取</button></div><p id="inspect-status" role="status"></p><div id="inspect-results"></div></section>
+              <div id="image-editor" hidden></div>
+              <section id="cad-fonts" class="cad-fonts" aria-label="CAD 字库" hidden><h3>图纸字库（可选）</h3><p class="editor-help">默认使用中文替代字体。若图纸文字缺字或字形不同，可补充原图使用的 TTF、TTC、OTF、SHX 字库；请直接选择字体文件。</p><label class="button button-secondary file-picker" for="fonts-input">选择字库文件</label><input id="fonts-input" class="sr-only" type="file" multiple accept=".ttf,.ttc,.otf,.shx"><ul id="fonts-list" class="file-list" aria-label="已添加字库"></ul><p id="fonts-error" class="field-error" role="alert" hidden></p></section>
+              <div class="step-label settings-step"><span>2</span><h3>设置转换参数</h3></div>
+              <div class="settings-grid"><label class="field" id="target-field"><span>目标格式</span><select id="target-format" name="target" required></select></label><div id="tool-options" class="options-grid"></div></div>
+              <div id="pdf-note" class="info-note" hidden><svg aria-hidden="true"><use href="#i-info"/></svg><p><strong>先确认 PDF 的内容类型</strong><br>可选中文字的 PDF 更适合转为可编辑文档；扫描件、图片型 PDF 需要 OCR 识别，普通文档转换不会自动识别图片中的文字。复杂版式请在转换后复核。</p></div>
+              <div class="submit-bar"><div><strong id="submit-summary">添加文件后即可开始</strong><span id="submit-help">转换会在后台运行，可继续处理其他文件。</span></div><button class="button button-primary" id="convert-button" type="submit" disabled><span id="convert-label">开始转换</span><svg aria-hidden="true"><use href="#i-arrow"/></svg></button></div>
+              <p id="submit-error" class="field-error" role="alert" hidden></p>
+            </form>
+          </section>
+          <footer class="work-footer"><svg aria-hidden="true"><use href="#i-info"/></svg><span id="retention-note">文件保存期限以工作台配置为准，请及时下载结果。</span><span class="footer-local">原文件不会被修改</span></footer>
+        </div>
+        <aside id="queue-panel" class="queue-panel surface" aria-labelledby="queue-title"><div class="queue-heading"><div><h2 id="queue-title">任务队列 <span id="queue-total">0</span></h2><p id="queue-subtitle">仅显示当前会话的任务</p></div><button class="icon-button" id="refresh-jobs" type="button" aria-label="刷新任务队列"><svg aria-hidden="true"><use href="#i-refresh"/></svg></button></div><div class="queue-stats"><div><strong id="stat-active">0</strong><span>进行中</span></div><div><strong id="stat-success">0</strong><span>已完成</span></div><div><strong id="stat-failed">0</strong><span>失败</span></div></div><div class="queue-toolbar"><span id="poll-status">每 2 秒自动更新</span><button class="text-button" id="clear-finished" hidden type="button">清除已结束</button></div><p id="jobs-error" class="queue-error" role="alert" hidden></p><div id="job-list" class="job-list"><div class="queue-empty"><svg aria-hidden="true"><use href="#i-clock"/></svg><h3>转换任务在这里集合</h3><p>添加文件并开始转换，<br>完成后即可下载结果。</p></div></div><div class="queue-bottom"><svg aria-hidden="true"><use href="#i-shield"/></svg><span>关闭页面后任务仍会继续运行。<br>请使用同一浏览器返回查看。</span></div></aside>
+      </div>
+    </main>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <noscript><div class="noscript">格式工坊需要 JavaScript 才能上传文件和查看任务，请在浏览器设置中启用。</div></noscript>
+</body>
+</html>

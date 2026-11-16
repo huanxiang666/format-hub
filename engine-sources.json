@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "policy": "仅使用固定 HTTPS 上游地址与锁定 SHA256；用户可显式选择 HTTPS 正向代理；从不自动采用第三方镜像执行文件。",
+  "engines": {
+    "windows-office": {
+      "label": "LibreOffice 26.2.7 Windows x64",
+      "platform": "win32",
+      "filename": "LibreOffice_26.2.7_Win_x86-64.msi",
+      "urls": [
+        "https://download.documentfoundation.org/libreoffice/stable/26.2.7/win/x86_64/LibreOffice_26.2.7_Win_x86-64.msi",
+        "https://downloadarchive.documentfoundation.org/libreoffice/old/26.2.7.2/win/x86_64/LibreOffice_26.2.7.2_Win_x86-64.msi"
+      ],
+      "sha256": "480fecf759fc6393bd614fbf43753eb95a8198fc1a065d41b727e3b664cd1e59",
+      "checksum_source": "https://download.documentfoundation.org/libreoffice/stable/26.2.7/win/x86_64/LibreOffice_26.2.7_Win_x86-64.msi.sha256",
+      "archive": "msi-admin",
+      "max_download_bytes": 536870912,
+      "max_extract_bytes": 2147483648,
+      "install_dir": "runtime/libreoffice",
+      "entrypoint": "runtime/libreoffice/program/soffice.exe",
+      "license": "MPL-2.0; bundled upstream license files are preserved",
+      "source": "https://www.libreoffice.org/download/download-libreoffice/",
+      "verification": "Official checksum retrieved 2026-11-16; private administrative installation must be verified in Windows CI."
+    },
+    "windows-dwg": {
+      "label": "LibreDWG 0.14 Windows x64",
+      "platform": "win32",
+      "filename": "libredwg-0.14-win64.zip",
+      "urls": ["https://github.com/LibreDWG/libredwg/releases/download/0.14/libredwg-0.14-win64.zip"],
+      "sha256": "1ad7e15344d20b3426c3435b078d82fb84b35062815946b2cca9c5fc9810fea8",
+      "checksum_source": "https://api.github.com/repos/LibreDWG/libredwg/releases/tags/0.14",
+      "archive": "zip",
+      "max_download_bytes": 16777216,
+      "max_extract_bytes": 268435456,
+      "install_dir": "runtime/dwg",
+      "entrypoint": "runtime/dwg/dwg2dxf.exe",
+      "license": "GPL-3.0-or-later",
+      "source": "https://github.com/LibreDWG/libredwg/releases/download/0.14/libredwg-0.14.tar.xz",
+      "source_sha256": "62ebb73b984f865960f20ed26619ea5f8789d5e3fd088fa40a2598384da81275"
+    }
+  },
+  "bundled": {
+    "linux-office": {"source": "runtime/packages/manifest.json", "target": "Ubuntu 26.04 amd64; host ICU78/glibc2.43", "license": "MPL-2.0 and upstream component licenses"},
+    "linux-dwg": {"version": "0.14", "source": "https://github.com/LibreDWG/libredwg/releases/tag/0.14", "license": "GPL-3.0-or-later"},
+    "ffmpeg": {"source": "imageio-ffmpeg wheel pinned by requirements.lock", "license": "GPL-3.0-or-later; engine build flags retained by -version"},
+    "noto-cjk": {"file": "packaging/NotoSansCJK-Regular.ttc", "sha256": "b76b0433203017ca80401b2ee0dd69350349871c4b19d504c34dbdd80541690a", "source": "https://github.com/notofonts/noto-cjk", "license": "SIL Open Font License 1.1"}
+  }
+}
