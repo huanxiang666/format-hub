@@ -31,6 +31,16 @@ Load command 3
             self.assertEqual(stage.dependencies(Path('/fixture/lib.dylib')), ['@rpath/libbrotlicommon.1.dylib', '/usr/lib/libSystem.B.dylib'])
             self.assertEqual(stage.load_commands(Path('/fixture/lib.dylib'))[1], ['@loader_path'])
 
+    def test_java_class_is_not_fat_macho(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / 'JREProperties.class'
+            source.write_bytes(bytes.fromhex('cafebabe000000340020') + bytes(80))
+            self.assertFalse(stage.macho(source))
+            source.write_bytes(bytes.fromhex('cafebabe00000001') + bytes(20))
+            self.assertTrue(stage.macho(source))
+            source.write_bytes(bytes.fromhex('cffaedfe') + bytes(28))
+            self.assertTrue(stage.macho(source))
+
     def test_rpath_resolution_and_missing_dependency(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

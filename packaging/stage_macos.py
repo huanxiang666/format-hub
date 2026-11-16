@@ -19,7 +19,12 @@ def macho(path):
     if not path.is_file() or path.is_symlink():
         return False
     with path.open('rb') as stream:
-        return stream.read(4) in MAGIC
+        header = stream.read(8)
+    if header[:4] in (b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca'):
+        # Java .class files share FAT_MAGIC; their version is not nfat_arch.
+        count = int.from_bytes(header[4:8], 'big' if header[:4] == b'\xca\xfe\xba\xbe' else 'little')
+        return 0 < count <= 32 and path.stat().st_size >= 8 + count * 20
+    return header[:4] in MAGIC
 
 
 def load_commands(path):
