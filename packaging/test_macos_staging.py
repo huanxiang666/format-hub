@@ -48,7 +48,7 @@ Load command 3
             source.touch()
             common = root / 'libbrotlicommon.1.dylib'
             common.touch()
-            self.assertEqual(stage.resolve_dependency(source, '@rpath/'+common.name, ['@loader_path'], root), common)
+            self.assertEqual(stage.resolve_dependency(source, '@rpath/'+common.name, ['@loader_path'], root), common.resolve())
             with self.assertRaisesRegex(RuntimeError, 'missing'):
                 stage.resolve_dependency(source, '@rpath/missing.dylib', ['@loader_path'], root)
 
