@@ -92,7 +92,7 @@ class BootstrapTests(unittest.TestCase):
                 self.assertEqual(bootstrap.verify_windows_office(office, profile), 'LibreOffice 26.2.7.2')
                 command = run.call_args.args[0]
                 self.assertTrue(command[0].endswith('soffice.com'))
-                self.assertIn('-env:UserInstallation=' + profile.as_uri(), command)
+                self.assertIn('-env:UserInstallation=' + profile.resolve().as_uri(), command)
                 self.assertIn('--norestore', command)
                 run.return_value.stdout = b''
                 with self.assertRaises(RuntimeError):
