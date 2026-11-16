@@ -51,6 +51,8 @@ jobs:
           $env:SOFFICE = "$pwd/runtime/libreoffice/program/soffice.com"
           python packaging/diagnose_windows.py "$($exe.FullName)" --report packaging/windows-differential.json 2>&1 | Tee-Object packaging/windows-differential.log
           if ($LASTEXITCODE -ne 0) { throw 'Differential diagnostic failed; inspect retained logs' }
+          python packaging/smoke_release.py "$($exe.FullName)" --office --report packaging/windows-diagnostic-http.json 2>&1 | Tee-Object packaging/windows-diagnostic-http.log
+          if ($LASTEXITCODE -ne 0) { Write-Warning 'HTTP differential reproduced failure; retained diagnostic log' }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -58,4 +60,7 @@ jobs:
           path: |
             packaging/windows-differential.json
             packaging/windows-differential.log
+            packaging/windows-diagnostic-http.json
+            packaging/windows-diagnostic-http.log
+            packaging/windows-worker-*.log
           if-no-files-found: warn
