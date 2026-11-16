@@ -28,6 +28,22 @@ def test_macos_frozen_external_engine_cleans_private_loader_paths():
     assert environment['DYLD_LIBRARY_PATH']=='/bundle'
 
 
+def test_offline_ignores_host_engines_and_requires_private_files(tmp_path, monkeypatch):
+    from app import engines
+    root=tmp_path/'bundle';(root/'runtime').mkdir(parents=True)
+    host=tmp_path/'host-soffice';host.write_text('host');host.chmod(0o755)
+    monkeypatch.setattr(engines,'ROOT',root)
+    monkeypatch.setenv('FORMAT_HUB_OFFLINE','1')
+    monkeypatch.setenv('SOFFICE',str(host));monkeypatch.setenv('FFMPEG',str(host))
+    monkeypatch.setattr(engines.shutil,'which',lambda name:str(host))
+    assert engines._program('SOFFICE',['soffice'],['runtime/soffice']) is None
+    assert engines._ffmpeg() is None
+    private=root/'runtime/soffice';private.write_text('private');private.chmod(0o755)
+    assert engines._program('SOFFICE',['soffice'],['runtime/soffice'])==str(private)
+    private.unlink();private.symlink_to(host)
+    assert engines._program('SOFFICE',['soffice'],['runtime/soffice']) is None
+
+
 def test_source_external_engine_preserves_environment():
     environment={'DYLD_LIBRARY_PATH':'/custom'}
     with patch.object(processes.sys,'platform','darwin'), patch.object(processes.sys,'frozen',False,create=True), patch.object(processes.subprocess,'run') as call:

@@ -42,12 +42,17 @@ def _has(module: str) -> bool:
 
 
 def _program(env: str, names: list[str], relative: list[str]) -> str | None:
-    candidates = ([os.environ[env]] if os.environ.get(env) else [])
+    offline = os.environ.get('FORMAT_HUB_OFFLINE') == '1'
+    candidates = [] if offline else ([os.environ[env]] if os.environ.get(env) else [])
     candidates += [str(ROOT / p) for p in relative]
-    candidates += [shutil.which(name) or '' for name in names]
+    if not offline:
+        candidates += [shutil.which(name) or '' for name in names]
     for candidate in candidates:
         if candidate and Path(candidate).is_file() and os.access(candidate, os.X_OK):
-            return str(Path(candidate).resolve())
+            resolved = Path(candidate).resolve()
+            if offline and not resolved.is_relative_to((ROOT / 'runtime').resolve()):
+                continue
+            return str(resolved)
     return None
 
 
@@ -81,6 +86,8 @@ def _ffmpeg() -> str | None:
     found = _program('FFMPEG',['ffmpeg'],['runtime/ffmpeg','runtime/ffmpeg.exe'])
     if found:
         return found
+    if os.environ.get('FORMAT_HUB_OFFLINE') == '1':
+        return None
     if _has('imageio_ffmpeg'):
         try:
             import imageio_ffmpeg

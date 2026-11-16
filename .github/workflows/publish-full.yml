@@ -26,6 +26,8 @@ jobs:
           release=json.load(open('/tmp/release.json'))
           assert run['conclusion']=='success' and run['status']=='completed'
           assert run['path']=='.github/workflows/full-release.yml'
+          assert run['head_branch']=='main'
+          assert run['repository']['full_name']==run['head_repository']['full_name']=='${{ github.repository }}'
           assert release['id']==446776176 and release['draft'] and release['tag_name']=='v1.2.0'
           print('Verified build',run['id'],run['head_sha'],'draft',release['id'])
           PY
@@ -63,6 +65,30 @@ jobs:
               print('Verified',key,archive.name,archive.stat().st_size,digest)
           assert seen==expected,(seen,expected)
           assert len(list(root.rglob('*.zip')))==3
+          PY
+      - name: Bind immutable release tag to verified build commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          python - <<'PY'
+          import json,os,subprocess
+          build=json.load(open('/tmp/build.json'))
+          def api(path,*args):
+              result=subprocess.run(['gh','api',path,*args],text=True,capture_output=True,check=True)
+              return json.loads(result.stdout)
+          refs=api('repos/'+os.environ['GH_REPO']+'/git/matching-refs/tags/v1.2.0')
+          exact=[ref for ref in refs if ref['ref']=='refs/tags/v1.2.0']
+          assert len(exact)<=1
+          if exact:
+              obj=exact[0]['object']
+              while obj['type']=='tag':
+                  obj=api('repos/'+os.environ['GH_REPO']+'/git/tags/'+obj['sha'])['object']
+              assert obj['type']=='commit' and obj['sha']==build['head_sha'],obj
+          else:
+              ref=api('repos/'+os.environ['GH_REPO']+'/git/refs','--method','POST','-f','ref=refs/tags/v1.2.0','-f','sha='+build['head_sha'])
+              assert ref['object']['sha']==build['head_sha']
+          print('Release tag matches verified build',build['head_sha'])
           PY
       - name: Upload to existing draft without changing publication state
         env:
