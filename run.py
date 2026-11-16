@@ -7,6 +7,7 @@ import socket
 import sys
 
 from app.paths import ROOT, default_data
+from app.version import VERSION
 
 
 def main():
@@ -21,10 +22,15 @@ def main():
     parser.add_argument('--host', default=os.environ.get('FORMAT_HUB_HOST', '0.0.0.0'))
     parser.add_argument('--port', type=int, default=int(os.environ.get('FORMAT_HUB_PORT', '8765')))
     parser.add_argument('--data-dir', type=Path, help='任务数据目录，默认项目下 data')
+    parser.add_argument('--offline', action='store_true', help='离线启动：仅使用随包引擎，禁止引擎下载')
     parser.add_argument('--install-engine', choices=['windows-office', 'windows-dwg'], help='下载并校验应用专用转换引擎')
-    parser.add_argument('--version', action='version', version='格式工坊 1.1.0')
+    parser.add_argument('--version', action='version', version=f'格式工坊 {VERSION}')
     args = parser.parse_args()
+    if args.offline:
+        os.environ['FORMAT_HUB_OFFLINE'] = '1'
     if args.install_engine:
+        if args.offline or os.environ.get('FORMAT_HUB_OFFLINE') == '1':
+            parser.error('离线模式禁止下载引擎；请使用随包引擎')
         from bootstrap import install_engine
         print('正在下载并校验引擎，请保持网络连接。', flush=True)
         print(install_engine(args.install_engine, root=ROOT), flush=True)

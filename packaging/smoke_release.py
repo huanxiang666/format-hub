@@ -20,9 +20,27 @@ def main():
     parser.add_argument('binary', type=Path)
     parser.add_argument('--office', action='store_true')
     parser.add_argument('--report', type=Path)
+    parser.add_argument('--offline', action='store_true', help='Forbid downloads and hide host engine search paths')
+    parser.add_argument('--archive', type=Path, help='The actual extracted distribution archive for evidence')
     args = parser.parse_args()
     binary = args.binary.resolve()
-    report = {'binary': str(binary), 'checks': []}
+    import hashlib
+    report = {'binary': str(binary), 'offline': args.offline, 'checks': []}
+    if args.archive:
+        archive = args.archive.resolve()
+        report['archive'] = {'name': archive.name, 'sha256': hashlib.file_digest(archive.open('rb'), 'sha256').hexdigest(), 'bytes': archive.stat().st_size}
+        assert not binary.is_relative_to(archive.parent), 'Smoke binary must come from separately extracted attachment'
+    release = json.loads((binary.parent / 'release-manifest.json').read_text(encoding='utf-8'))
+    report['release'] = {key: release.get(key) for key in ('version', 'platform', 'architecture', 'build_commit', 'office_bundled')}
+    env = {k: v for k, v in os.environ.items() if k not in ('FORMAT_HUB_TOKEN', 'SOFFICE', 'DWG2DXF', 'FFMPEG', 'FORMAT_HUB_DATA') and not k.startswith(('DYLD_', 'LD_LIBRARY_PATH'))}
+    if args.offline:
+        env['FORMAT_HUB_OFFLINE'] = '1'
+        env['PATH'] = os.environ.get('SystemRoot', 'C:\\Windows') + '\\System32' if os.name == 'nt' else '/usr/bin:/bin:/usr/sbin:/sbin'
+        env['HTTP_PROXY'] = env['HTTPS_PROXY'] = env['ALL_PROXY'] = 'http://127.0.0.1:9'
+        env['NO_PROXY'] = '127.0.0.1,localhost'
+        check = subprocess.run([str(binary), '--offline', '--install-engine', 'windows-office'], env=env, capture_output=True, text=True, timeout=20)
+        assert check.returncode != 0 and ('离线' in check.stderr or 'offline' in check.stderr.lower()), check.stderr
+        report['checks'].append({'offline_download_rejected': True})
     with tempfile.TemporaryDirectory(prefix='format-hub-release-smoke-') as temporary:
         temporary = Path(temporary)
         help_result = subprocess.run([str(binary), '--help'], cwd=temporary, capture_output=True, text=True, errors='replace', timeout=20, check=False)
@@ -37,10 +55,16 @@ def main():
         with socket.socket() as sock:
             sock.bind(('127.0.0.1', 0)); port = sock.getsockname()[1]
         log = temporary / 'server.log'
-        env = {k: v for k, v in os.environ.items() if k not in ('FORMAT_HUB_TOKEN', 'SOFFICE', 'DWG2DXF', 'FFMPEG', 'FORMAT_HUB_DATA')}
         env['FORMAT_HUB_DATA'] = str(temporary / 'data')
+        offline_flags = ['--offline'] if args.offline else []
+        if args.office:
+            office = binary.parent / ('runtime/libreoffice/program/soffice.com' if os.name == 'nt' else 'runtime/LibreOffice.app/Contents/MacOS/soffice')
+            if release['platform'] == 'linux':
+                office = binary.parent / 'runtime/soffice'
+            assert office.is_file() and office.resolve().is_relative_to(binary.parent)
+            report['checks'].append({'bundled_office': str(office)})
         with log.open('w') as stream:
-            process = subprocess.Popen([str(binary), '--host', '127.0.0.1', '--port', str(port), '--data-dir', str(temporary / 'data')], cwd=temporary, env=env, stdout=stream, stderr=stream)
+            process = subprocess.Popen([str(binary), *offline_flags, '--host', '127.0.0.1', '--port', str(port), '--data-dir', str(temporary / 'data')], cwd=temporary, env=env, stdout=stream, stderr=stream)
             try:
                 with httpx.Client(base_url=f'http://127.0.0.1:{port}', timeout=30) as client:
                     for i in range(150):

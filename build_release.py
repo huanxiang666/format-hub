@@ -17,7 +17,7 @@ import time
 import zipfile
 
 ROOT = Path(__file__).resolve().parent
-APPROVED_TOP = ('run.py', 'bootstrap.py', 'engine-sources.json', 'requirements.txt', 'requirements.lock', 'THIRD-PARTY-NOTICES.md', 'LICENSE', 'README.md')
+APPROVED_TOP = ('run.py', 'bootstrap.py', 'engine-sources.json', 'requirements.txt', 'requirements.lock', 'requirements-macos.txt', 'THIRD-PARTY-NOTICES.md', 'LICENSE', 'README.md')
 MODULES = ('uvicorn', 'fastapi', 'starlette', 'multipart', 'PIL', 'pymupdf', 'fitz', 'pdf2docx', 'docx', 'openpyxl', 'ezdxf', 'cairosvg', 'defusedxml', 'imageio_ffmpeg')
 SOFFICE_SH = '''#!/bin/sh
 set -eu
@@ -58,12 +58,15 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     system = {'Linux': 'linux', 'Windows': 'windows', 'Darwin': 'macos'}[platform.system()]
-    if system == 'macos':
-        parser.error('macOS 请使用源码 bootstrap；尚无实机二进制验证')
+    from app.version import VERSION
+    machine = platform.machine().lower()
+    architecture = {'x86_64': 'x64', 'amd64': 'x64', 'arm64': 'arm64', 'aarch64': 'arm64'}.get(machine)
+    if architecture is None or (system != 'macos' and architecture != 'x64'):
+        parser.error('目标架构不受支持')
+    if args.skip_office and system != 'linux':
+        parser.error('完整 Windows/macOS 发行包必须内置 LibreOffice')
     stamp = time.strftime('%Y%m%d-%H%M%S')
-    name = f'format-hub-v1.1.0-{system}-x64-{stamp}'
-    if platform.machine().lower() not in ('x86_64', 'amd64'):
-        parser.error('此构建目标仅为 x64')
+    name = f'format-hub-v{VERSION}-{system}-{architecture}-{stamp}'
     with tempfile.TemporaryDirectory(prefix='format-hub-build-') as temporary:
         temp = Path(temporary)
         command = [sys.executable, '-m', 'PyInstaller', '--noconfirm', '--clean', '--onedir', '--contents-directory', '.',
@@ -72,12 +75,15 @@ def main():
         for module in MODULES:
             command += ['--collect-all', module]
         command += ['--collect-submodules', 'app']
-        if system == 'windows':
+        if system in ('windows', 'macos'):
             native = ROOT / 'runtime/native'
-            if not native.is_dir():
-                raise RuntimeError('Windows 构建需先准备私有 Cairo DLL')
-            for dll in native.glob('*.dll'):
-                command += ['--add-binary', f'{dll}{os.pathsep}.']
+            libraries = list(native.glob('*.dll' if system == 'windows' else '*.dylib'))
+            if not libraries:
+                raise RuntimeError('构建需先准备私有 Cairo native 依赖闭包')
+            for library in libraries:
+                command += ['--add-binary', f'{library}{os.pathsep}.']
+        if system == 'macos':
+            command += ['--target-architecture', 'arm64' if architecture == 'arm64' else 'x86_64']
         for module in ('pytest', 'onnxruntime', 'pymupdf_layout', 'pymupdf4llm', 'matplotlib', 'tkinter', 'IPython'):
             command += ['--exclude-module', module]
         command.append(str(ROOT / 'run.py'))
@@ -138,10 +144,26 @@ def main():
             if not paths:
                 raise RuntimeError('未定位 libseccomp 实体文件')
             shutil.copy2(paths[0], bundle / library)
-        else:
-            copytree(ROOT / 'runtime/dwg', runtime / 'dwg')
+        elif system == 'windows':
+            for directory, entrypoint in [('dwg', 'dwg2dxf.exe'), ('libreoffice', 'program/soffice.com')]:
+                if not (ROOT / 'runtime' / directory / entrypoint).is_file():
+                    raise RuntimeError(f'完整包必需引擎缺失：{directory}/{entrypoint}')
+                copytree(ROOT / 'runtime' / directory, runtime / directory)
             copytree(ROOT / 'runtime/native-licenses', bundle / 'licenses/native')
             shutil.copy2(ROOT / 'packaging/windows-start.cmd', bundle / '启动格式工坊.cmd')
+        else:
+            office = ROOT / 'runtime/LibreOffice.app'
+            if not (office / 'Contents/MacOS/soffice').is_file() or not (ROOT / 'runtime/dwg2dxf').is_file():
+                raise RuntimeError('macOS 完整包缺少 LibreOffice 或 LibreDWG')
+            subprocess.run(['ditto', str(office), str(runtime / 'LibreOffice.app')], check=True)
+            copytree(ROOT / 'runtime/native', runtime / 'native')
+            copytree(ROOT / 'runtime/native-licenses', bundle / 'licenses/native')
+            shutil.copy2(ROOT / 'runtime/dwg2dxf', runtime / 'dwg2dxf')
+            shutil.copy2(ROOT / 'packaging/macos-start.command', bundle / '启动格式工坊.command')
+            (bundle / '启动格式工坊.command').chmod(0o755)
+            # Sign only FormatHub's executable. Never re-sign upstream LibreOffice.app.
+            subprocess.run(['codesign', '--force', '--sign', '-', str(bundle / 'format-hub')], check=True)
+            subprocess.run(['codesign', '--verify', '--deep', '--strict', str(runtime / 'LibreOffice.app')], check=True)
         readme = ROOT / 'packaging/RELEASE-README.txt'
         if readme.exists():
             shutil.copy2(readme, bundle / '使用说明.txt')
@@ -151,14 +173,18 @@ def main():
                 source = ROOT / filename
                 if source.is_file():
                     archive.write(source, filename)
+            for filename in ('build_release.py', 'packaging/stage_macos.py', 'packaging/smoke_release.py', 'packaging/windows-start.cmd', 'packaging/macos-start.command'):
+                archive.write(ROOT / filename, filename)
             for source in sorted((ROOT / 'app').rglob('*')):
                 if source.is_file() and '__pycache__' not in source.parts and '.bak-' not in source.name:
                     archive.write(source, source.relative_to(ROOT))
         metadata = {
-            'name': name, 'platform': system, 'architecture': 'x64', 'python': platform.python_version(),
-            'build_host': platform.platform(), 'office_bundled': system == 'linux' and not args.skip_office,
-            'compatibility': 'Ubuntu 26.04 x64; glibc 2.43; Linux kernel >=6.7 (Landlock ABI>=4)' if system == 'linux' else 'Windows x64; Office optional private engine download',
-            'signing': 'unsigned local verification artifact; public signing not configured',
+            'name': name, 'version': VERSION, 'platform': system, 'architecture': architecture, 'python': platform.python_version(),
+            'build_host': platform.platform(), 'office_bundled': not args.skip_office,
+            'compatibility': {'linux': 'Ubuntu 26.04 x64; glibc 2.43; Linux kernel >=6.7 (Landlock ABI>=4)', 'windows': 'Windows 10/11 x64; all engines private and bundled', 'macos': 'macOS 15+; native architecture; all engines private and bundled'}[system],
+            'signing': 'FormatHub executable ad-hoc signed; no Developer ID certificate or notarization configured; upstream LibreOffice signature preserved' if system == 'macos' else 'unsigned; code signing certificate not configured',
+            'engines': json.loads((ROOT / 'engine-sources.json').read_text(encoding='utf-8')),
+            'build_commit': os.environ.get('GITHUB_SHA', ''),
             'excluded': ['data', 'backups', 'evidence', '.env', '.venv', 'runtime/packages', 'API tokens'],
             'files': {},
         }
@@ -176,8 +202,10 @@ def main():
         if destination.exists():
             raise RuntimeError('发行输出目录已存在')
         shutil.move(str(bundle), destination)
-    archive = output / (name + ('.zip' if system == 'windows' else '.tar.gz'))
-    if system == 'windows':
+    archive = output / (name + ('.tar.gz' if system == 'linux' else '.zip'))
+    if system == 'macos':
+        subprocess.run(['ditto', '-c', '-k', '--sequesterRsrc', '--keepParent', str(destination), str(archive)], check=True)
+    elif system == 'windows':
         with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as stream:
             for path in sorted(destination.rglob('*')):
                 if path.is_file():

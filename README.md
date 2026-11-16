@@ -9,8 +9,9 @@
 **优先下载 Releases 中与你系统匹配的发行包，解压到可写目录。**
 
 - Linux x64：运行 `./format-hub`。完整包包含 Python、FFmpeg、LibreDWG、中文字体和 LibreOffice。
-- Windows x64：双击 `启动格式工坊.cmd`。包内包含 Python、FFmpeg、LibreDWG和字体；首次启动会自动下载、校验并展开应用专用 Office 引擎，不需要用户另装 Office。
-- macOS：目前提供源码启动方式，尚未发布经过验证的原生二进制。
+- Windows x64 完整引擎包：双击 `启动格式工坊.cmd`。包内包含 Python、LibreOffice、FFmpeg、LibreDWG和字体，首次启动无需联网下载引擎。
+- macOS：新增 Apple Silicon（arm64）与 Intel（x64）完整引擎构建，包内包含 LibreOffice.app 和应用运行环境，使用包内 `.command` 启动。以 Releases 实际附件和对应平台验收记录为准；没有附件的平台仍视为待验证，不把构建脚本当成成品。
+- 完整包体积更大，用一次下载换取离线开箱即用。v1.1.0精简Windows包仍保留，其首次下载行为与完整包不同。
 
 打开 `http://127.0.0.1:8765`；同一局域网的同事打开 `http://部署机器IP:8765`。启动窗口会显示地址。电脑需要保持开机；公网部署请使用 HTTPS 反向代理并设置团队口令。
 
@@ -59,10 +60,12 @@ Linux 完整包当前构建环境为 **Ubuntu 26.04 x64 / glibc 2.43**，转换�
 
 ## 引擎与国内网络
 
-小型引擎随包提供。较大Office引擎由应用启动器安装到自身runtime目录：**固定HTTPS源、固定SHA256、下载/解包预算、原子落盘**，不写系统Office安装。源与许可证见 [engine-sources.json](engine-sources.json)。源码安装优先清华PyPI，失败回落官方PyPI。
+小型引擎随包提供。完整引擎版将较大的Office引擎也装入包内，不再在用户首次启动时下载。构建时仍使用**固定HTTPS源、固定SHA256、下载/解包预算、原子落盘**准备引擎，不写用户系统Office安装。精简/源码部署保留可选引擎准备命令。源与许可证见 [engine-sources.json](engine-sources.json)。源码安装优先清华PyPI，失败回落官方PyPI。
 
 ```bash
-# 固定白名单引擎，无任意URL执行入口
+# 完整包离线启动，不下载引擎
+format-hub --offline
+# 精简/源码部署保留固定白名单引擎命令
 format-hub --install-engine windows-office
 format-hub --install-engine windows-dwg
 ```

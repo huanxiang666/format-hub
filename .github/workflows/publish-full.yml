@@ -1,0 +1,72 @@
+name: Upload verified full release to v1.2.0 draft
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful full-release build run ID
+        required: true
+permissions:
+  actions: read
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require successful upstream workflow and draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RUN_ID: ${{ inputs.run_id }}
+        run: |
+          [[ "$BUILD_RUN_ID" =~ ^[0-9]+$ ]]
+          gh api "repos/${{ github.repository }}/actions/runs/$BUILD_RUN_ID" > /tmp/build.json
+          gh api "repos/${{ github.repository }}/releases/tags/v1.2.0" > /tmp/release.json
+          python - <<'PY'
+          import json
+          run=json.load(open('/tmp/build.json'))
+          release=json.load(open('/tmp/release.json'))
+          assert run['conclusion']=='success' and run['status']=='completed'
+          assert run['path']=='.github/workflows/full-release.yml'
+          assert release['id']==446776176 and release['draft'] and release['tag_name']=='v1.2.0'
+          print('Verified build',run['id'],run['head_sha'],'draft',release['id'])
+          PY
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: format-hub-full-*-v1.2.0
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          path: release
+      - name: Gate attachment hashes and offline conversion evidence
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import hashlib,json
+          root=Path('release')
+          build=json.load(open('/tmp/build.json'))
+          expected={('windows','x64'),('macos','arm64'),('macos','x64')}
+          seen=set()
+          for smoke in root.rglob('full-smoke-*.json'):
+              data=json.loads(smoke.read_text())
+              release=data['release']
+              key=(release['platform'],release['architecture'])
+              assert key in expected and key not in seen
+              seen.add(key)
+              assert release['version']=='1.2.0' and release['office_bundled']
+              assert release['build_commit']==build['head_sha'] and data['offline']
+              assert any(c.get('offline_download_rejected') for c in data['checks'])
+              operations={c.get('operation'):c for c in data['checks'] if 'operation' in c}
+              for name in ['image_convert','cad_convert','office_convert','media_audio']:
+                  assert operations[name]['state']=='succeeded' and operations[name]['bytes']>0
+              archive, = root.rglob(data['archive']['name'])
+              digest=hashlib.file_digest(archive.open('rb'),'sha256').hexdigest()
+              assert digest==data['archive']['sha256']==archive.with_suffix('.sha256').read_text().split()[0]
+              assert archive.stat().st_size==data['archive']['bytes']
+              print('Verified',key,archive.name,archive.stat().st_size,digest)
+          assert seen==expected,(seen,expected)
+          assert len(list(root.rglob('*.zip')))==3
+          PY
+      - name: Upload to existing draft without changing publication state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mapfile -d '' files < <(find release -type f \( -name '*.zip' -o -name '*.sha256' -o -name 'full-smoke-*.json' \) -print0)
+          gh release upload v1.2.0 "${files[@]}" --repo "${{ github.repository }}"

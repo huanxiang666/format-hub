@@ -29,6 +29,7 @@ from starlette.formparsers import MultiPartParser, MultiPartException
 
 from app.engines import catalog
 from app.paths import ROOT, default_data
+from app.version import VERSION
 
 DATA = Path(os.environ.get('FORMAT_HUB_DATA', str(default_data()))).resolve()
 MAX_MB = int(os.environ.get('FORMAT_HUB_MAX_FILE_MB', '200'))
@@ -318,7 +319,7 @@ async def lifespan(app):
     await asyncio.gather(*tasks, return_exceptions=True)
 
 
-app = FastAPI(title='格式工坊 API', version='1.1.0', lifespan=lifespan)
+app = FastAPI(title='格式工坊 API', version=VERSION, lifespan=lifespan)
 app.mount('/static', StaticFiles(directory=ROOT / 'app' / 'static'), name='static')
 
 
@@ -378,7 +379,7 @@ def index():
 
 @app.get('/api/health')
 def health():
-    return {'status': 'ok', 'version': '1.1.0', 'running': len(active), 'queued': queue.qsize(), 'workers': WORKERS}
+    return {'status': 'ok', 'version': VERSION, 'running': len(active), 'queued': queue.qsize(), 'workers': WORKERS}
 
 
 @app.get('/api/session')
@@ -425,7 +426,7 @@ def logout(request: Request):
 @app.get('/api/catalog')
 def get_catalog(request: Request):
     session(request)
-    return {'tools': catalog(), 'limits': {'max_file_mb': MAX_MB, 'max_files': MAX_FILES, 'workers': WORKERS, 'retention_hours': RETENTION}, 'version': '1.1.0'}
+    return {'tools': catalog(), 'limits': {'max_file_mb': MAX_MB, 'max_files': MAX_FILES, 'workers': WORKERS, 'retention_hours': RETENTION}, 'version': VERSION}
 
 
 @app.get('/api/jobs')

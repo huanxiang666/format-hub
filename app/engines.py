@@ -55,7 +55,7 @@ _PROBES = {}
 
 
 def _soffice() -> str | None:
-    program = _program('SOFFICE',['soffice','libreoffice'],['runtime/soffice','runtime/office/usr/lib/libreoffice/program/soffice','runtime/libreoffice/program/soffice','runtime/libreoffice/program/soffice.com','runtime/libreoffice/program/soffice.exe'])
+    program = _program('SOFFICE',['soffice','libreoffice'],['runtime/soffice','runtime/LibreOffice.app/Contents/MacOS/soffice','runtime/office/usr/lib/libreoffice/program/soffice','runtime/libreoffice/program/soffice','runtime/libreoffice/program/soffice.com','runtime/libreoffice/program/soffice.exe'])
     if not program:
         return None
     # A wrapper existing on disk does not prove that its shared libraries work.

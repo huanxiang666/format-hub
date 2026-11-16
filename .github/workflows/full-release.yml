@@ -1,0 +1,123 @@
+name: Build verified full v1.2.0 releases
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  full:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            platform: windows
+            arch: x64
+          - runner: macos-15
+            platform: macos
+            arch: arm64
+          - runner: macos-15-intel
+            platform: macos
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Windows Python dependencies
+        if: runner.os == 'Windows'
+        run: python -m pip install -r requirements.lock pyinstaller==6.22.3
+      - name: Install macOS Python and native dependencies
+        if: runner.os == 'macOS'
+        run: |
+          python -m pip install -r requirements-macos.txt
+          brew install cairo libredwg
+          python bootstrap.py --engine macos-office-${{ matrix.arch }}
+          python packaging/stage_macos.py
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        id: msys2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-cairo
+      - name: Prepare Windows private engines
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $msysRoot = '${{ steps.msys2.outputs.msys2-location }}'
+          New-Item -ItemType Directory -Force runtime/native,runtime/native-licenses | Out-Null
+          Copy-Item "$msysRoot/mingw64/bin/*.dll" runtime/native/
+          foreach ($candidate in @("$msysRoot/mingw64/share/licenses", "$msysRoot/usr/share/licenses")) {
+            if (Test-Path $candidate) { Copy-Item "$candidate/*" runtime/native-licenses/ -Recurse -Force }
+          }
+          & "$msysRoot/usr/bin/pacman.exe" -Qi | Set-Content runtime/native-licenses/msys2-package-metadata.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Native package metadata failed' }
+          $packageFiles = & "$msysRoot/usr/bin/pacman.exe" -Ql
+          if ($LASTEXITCODE -ne 0) { throw 'Native package file manifest failed' }
+          $packageFiles | Set-Content runtime/native-licenses/msys2-package-files.txt
+          foreach ($line in $packageFiles) {
+            if ($line -match '^([^ ]+) (/(mingw64|usr)/.*(?:LICENSE|COPYING|COPYRIGHT|NOTICE)[^/]*)$') {
+              $package = $Matches[1]; $relative = $Matches[2].TrimStart('/')
+              $source = Join-Path $msysRoot $relative
+              if (Test-Path $source -PathType Leaf) {
+                $target = Join-Path runtime/native-licenses "$package/$relative"
+                New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
+                Copy-Item $source $target -Force
+              }
+            }
+          }
+          python bootstrap.py --engine windows-dwg
+          if ($LASTEXITCODE -ne 0) { throw 'DWG install failed' }
+          python bootstrap.py --engine windows-office
+          if ($LASTEXITCODE -ne 0) { throw 'Office install failed' }
+      - name: Test installation boundaries
+        run: python -m unittest discover -s packaging -p test_*.py -v
+      - name: Build full Windows archive including Office
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:PATH = "$pwd/runtime/native;$env:PATH"
+          python build_release.py
+          if ($LASTEXITCODE -ne 0) { throw 'Full build failed' }
+      - name: Build full macOS archive including Office
+        if: runner.os == 'macOS'
+        run: python build_release.py
+      - name: Extract actual attachment into clean temporary location
+        shell: python
+        run: |
+          import json,os,subprocess,tempfile,zipfile
+          from pathlib import Path
+          archive, = Path('packaging/dist').glob('*.zip')
+          destination=Path(tempfile.mkdtemp(prefix='format-hub-attachment-'))
+          if os.name=='nt':
+              with zipfile.ZipFile(archive) as stream: stream.extractall(destination)
+          else:
+              subprocess.run(['ditto','-x','-k',str(archive.resolve()),str(destination)],check=True)
+          bundle, = [p for p in destination.iterdir() if p.is_dir() and p.name.startswith('format-hub-')]
+          binary=bundle/('format-hub.exe' if os.name=='nt' else 'format-hub')
+          with open(os.environ['GITHUB_ENV'],'a') as stream:
+              stream.write('SMOKE_BINARY='+str(binary)+'\n')
+              stream.write('SMOKE_ARCHIVE='+str(archive.resolve())+'\n')
+      - name: Offline attachment smoke with all four conversion categories
+        shell: bash
+        run: |
+          set -o pipefail
+          python packaging/smoke_release.py "$SMOKE_BINARY" --office --offline --archive "$SMOKE_ARCHIVE" --report packaging/full-smoke-${{ matrix.platform }}-${{ matrix.arch }}.json 2>&1 | tee packaging/full-smoke-${{ matrix.platform }}-${{ matrix.arch }}.log
+      - name: Upload tested archives and evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: format-hub-full-${{ matrix.platform }}-${{ matrix.arch }}-v1.2.0
+          compression-level: 0
+          path: |
+            packaging/dist/*.zip
+            packaging/dist/*.sha256
+            packaging/dist/*.json
+            packaging/full-smoke-*.json
+            packaging/full-smoke-*.log
+            packaging/windows-worker-*.log
+          if-no-files-found: warn
