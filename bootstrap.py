@@ -165,6 +165,21 @@ def engine_path(engine_id, root=ROOT):
     return root / manifest(root)['engines'][engine_id]['entrypoint']
 
 
+def verify_windows_office(office, profile):
+    """Use LibreOffice's console entrypoint and a fresh application-owned profile."""
+    office, profile = Path(office), Path(profile)
+    console = office / 'program/soffice.com'
+    if not console.is_file():
+        raise RuntimeError('LibreOffice MSI 缺少控制台入口 soffice.com')
+    result = subprocess.run([
+        str(console), f'-env:UserInstallation={profile.resolve().as_uri()}',
+        '--headless', '--norestore', '--nofirststartwizard', '--version',
+    ], check=True, capture_output=True, timeout=30)
+    if b'LibreOffice' not in result.stdout:
+        raise RuntimeError('LibreOffice 控制台版本校验未返回有效版本')
+    return result.stdout.decode('utf-8', errors='replace').strip()
+
+
 def install_engine(engine_id, root=ROOT, proxy=None):
     """Install a fixed manifest engine. No caller-provided URL or command is accepted."""
     root = Path(root).resolve()
@@ -214,7 +229,7 @@ def install_engine(engine_id, root=ROOT, proxy=None):
                 paths = list(unpacked.rglob('*'))
                 if any(p.is_symlink() for p in paths) or sum(p.stat().st_size for p in paths if p.is_file()) > source['max_extract_bytes'] or len(paths) > 30000:
                     raise ValueError('MSI 管理安装结果超过预算或含链接')
-                subprocess.run([str(unpacked / 'program/soffice.exe'), '--headless', '--version'], check=True, capture_output=True, timeout=30)
+                print(verify_windows_office(unpacked, staging / 'verification-profile'), flush=True)
             elif source['archive'] == 'file':
                 unpacked.mkdir()
                 shutil.copy2(archive, unpacked / source['filename'])

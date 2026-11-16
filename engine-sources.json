@@ -15,7 +15,7 @@
       "max_download_bytes": 536870912,
       "max_extract_bytes": 2147483648,
       "install_dir": "runtime/libreoffice",
-      "entrypoint": "runtime/libreoffice/program/soffice.exe",
+      "entrypoint": "runtime/libreoffice/program/soffice.com",
       "license": "MPL-2.0; bundled upstream license files are preserved",
       "source": "https://www.libreoffice.org/download/download-libreoffice/",
       "verification": "Official checksum retrieved 2026-11-16; private administrative installation must be verified in Windows CI."

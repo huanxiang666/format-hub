@@ -81,6 +81,23 @@ class BootstrapTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     bootstrap.extract_verified(archive, Path(tmp) / 'out', 3 if mode == 'size' else 100)
 
+    def test_windows_office_uses_console_and_private_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            office = Path(tmp) / 'office'
+            (office / 'program').mkdir(parents=True)
+            (office / 'program/soffice.com').write_bytes(b'console')
+            profile = Path(tmp) / 'profile'
+            with patch('bootstrap.subprocess.run') as run:
+                run.return_value.stdout = b'LibreOffice 26.2.7.2\n'
+                self.assertEqual(bootstrap.verify_windows_office(office, profile), 'LibreOffice 26.2.7.2')
+                command = run.call_args.args[0]
+                self.assertTrue(command[0].endswith('soffice.com'))
+                self.assertIn('-env:UserInstallation=' + profile.as_uri(), command)
+                self.assertIn('--norestore', command)
+                run.return_value.stdout = b''
+                with self.assertRaises(RuntimeError):
+                    bootstrap.verify_windows_office(office, profile)
+
     def test_tar_link_and_traversal(self):
         for mode in ('link', 'path'):
             with tempfile.TemporaryDirectory() as tmp:
