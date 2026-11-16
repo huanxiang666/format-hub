@@ -19,7 +19,7 @@ jobs:
         run: |
           [[ "$BUILD_RUN_ID" =~ ^[0-9]+$ ]]
           gh api "repos/${{ github.repository }}/actions/runs/$BUILD_RUN_ID" > /tmp/build.json
-          gh api "repos/${{ github.repository }}/releases/tags/v1.2.0" > /tmp/release.json
+          gh api "repos/${{ github.repository }}/releases/446776176" > /tmp/release.json
           python - <<'PY'
           import json
           run=json.load(open('/tmp/build.json'))
