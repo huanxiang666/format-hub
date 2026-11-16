@@ -72,7 +72,7 @@ jobs:
           & ./runtime/libreoffice/program/soffice.com --headless --norestore --version
           if ($LASTEXITCODE -ne 0) { throw 'LibreOffice private MSI image failed' }
       - name: Verify downloader security boundaries
-        run: python -m unittest discover -s packaging -p test_bootstrap.py -v
+        run: python -m unittest discover -s packaging -p test_*.py -v
       - name: Build onedir with Python, FFmpeg, LibreDWG and fonts
         shell: pwsh
         run: |
