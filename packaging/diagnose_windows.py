@@ -41,8 +41,10 @@ def main():
         document = Document(); document.add_paragraph('Synthetic Windows Office conversion test 中文')
         fixture = temp / 'sample.docx'; document.save(fixture)
         base = os.environ.copy(); base.pop('FORMAT_HUB_TOKEN', None)
-        for label, explicit in [('source-worker-explicit', True), ('frozen-worker-explicit', True), ('frozen-worker-discovery', False), ('frozen-worker-source-cwd', True)]:
+        for label, explicit in [('frozen-worker-explicit', True), ('frozen-worker-deep', True)]:
             directory = temp / label
+            if label.endswith('-deep'):
+                directory = temp / 'data/jobs' / ('a' * 32)
             (directory / 'input').mkdir(parents=True); (directory / 'output').mkdir()
             shutil.copy2(fixture, directory / 'input/sample.docx')
             (directory / 'spec.json').write_text(json.dumps({'operation': 'office_convert', 'files': ['sample.docx'], 'options': {'target': 'pdf'}}))
@@ -54,10 +56,12 @@ def main():
             command = [sys.executable, '-m', 'app.worker', str(directory)] if label.startswith('source') else [str(binary), '--worker', str(directory)]
             result = run_case(label, command, env, source if label.startswith('source') or label.endswith('source-cwd') else binary.parent)
             result['output_files'] = [p.name for p in (directory / 'output').iterdir()]
+            result['job_directory_characters'] = len(str(directory.resolve()))
+            result['estimated_office_profile_characters'] = len(str(directory.resolve() / 'temp/format-hub-office-12345678/profile'))
             record = directory / 'result.json'
             result['result'] = json.loads(record.read_text()) if record.exists() else None
             report['cases'].append(result)
-        for label, worker_env, working in [('direct-office-clean', False, source), ('direct-office-worker-env', True, source), ('direct-office-bundle-cwd', True, binary.parent), ('direct-office-program-cwd', True, console.parent), ('direct-office-temp-cwd', True, temp)]:
+        for label, worker_env, working in [('direct-office-clean', False, source)]:
             out = temp / label; out.mkdir()
             env = base.copy()
             if worker_env:
