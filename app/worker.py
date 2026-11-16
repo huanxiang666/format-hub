@@ -42,7 +42,8 @@ def main():
         os.environ['XDG_CONFIG_HOME'] = str(temp / 'config')
         os.environ['XDG_RUNTIME_DIR'] = str(temp)
         os.environ['GSETTINGS_BACKEND'] = 'memory'
-        os.environ['SAL_USE_VCLPLUGIN'] = 'svp'
+        if sys.platform == 'linux':
+            os.environ['SAL_USE_VCLPLUGIN'] = 'svp'
         import tempfile
         tempfile.tempdir = str(temp)
         if sys.platform == 'linux':

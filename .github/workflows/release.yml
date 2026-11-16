@@ -74,7 +74,11 @@ jobs:
       - name: Verify downloader security boundaries
         run: python -m unittest discover -s packaging -p test_bootstrap.py -v
       - name: Build onedir with Python, FFmpeg, LibreDWG and fonts
-        run: python build_release.py --skip-office
+        shell: pwsh
+        run: |
+          $env:PATH = "$pwd/runtime/native;$env:PATH"
+          python build_release.py --skip-office
+          if ($LASTEXITCODE -ne 0) { throw 'PyInstaller build failed' }
       - name: Smoke actual frozen executable
         shell: pwsh
         run: |
@@ -101,4 +105,5 @@ jobs:
             packaging/windows-smoke.json
             packaging/windows-smoke.log
             packaging/windows-frozen-help.log
+            packaging/windows-worker-*.log
           if-no-files-found: warn

@@ -229,7 +229,8 @@ def _save_pdf(doc,path,**kwargs):
 
 
 def _run(args,cwd=None):
-    result=subprocess.run([str(s) for s in args],cwd=cwd,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,errors='replace')
+    from app.processes import run_external
+    result=run_external([str(s) for s in args],cwd=cwd,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,errors='replace')
     if result.returncode:
         details=(result.stderr or result.stdout).strip()[-4000:]
         raise ValueError(f'{Path(args[0]).name} 转换失败（退出码 {result.returncode}）：{details}')
@@ -593,10 +594,10 @@ def _office(files,out,options):
                 input_filter=['--infilter=Text (encoded):UTF8']
             elif src.suffix.lower()=='.csv':
                 input_filter=['--infilter=Text - txt - csv (StarCalc):44,34,76']
-            _run([program,f'-env:UserInstallation={(temp/"profile").as_uri()}','--headless',*input_filter,'--convert-to',spec,'--outdir',temp,src])
+            conversion = _run([program,f'-env:UserInstallation={(temp/"profile").as_uri()}','--headless','--norestore','--nofirststartwizard',*input_filter,'--convert-to',spec,'--outdir',temp,src])
             converted=temp/(src.stem+'.'+target)
             if not converted.is_file() or not converted.stat().st_size:
-                raise ValueError(f'LibreOffice 未生成 {target}；文件可能损坏或目标过滤器不支持')
+                raise ValueError(f'LibreOffice 未生成 {target}；诊断：{(conversion.stdout + conversion.stderr).strip()[-2000:]}')
             p=_output(out,src.stem,target); shutil.copyfile(converted,p); outputs.append(p)
     return outputs
 
