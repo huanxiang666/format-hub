@@ -1,0 +1,72 @@
+{
+  "binary": "/home/huanxiang455/桌面/DSH/out/20261116-format-hub/packaging/dist/format-hub-linux-x64-20261116-133611/format-hub",
+  "checks": [
+    {
+      "help": "usage: format-hub [-h] [--host HOST] [--port PORT] [--data-dir DATA_DIR]\n                  [--install-engine {windows-office,windows-dwg}] [--version]\n\n格式工坊：一台部署，团队共用。Ctrl+C 停止。\n\noptions:\n  -h, --help            show this help message and exit\n  --host HOST\n  --port PORT\n  --data-dir DATA_DIR   任务数据目录，默认项目下 data\n  --install-engine {windows-office,windows-dwg}\n                        下载并校验应用专用转换引擎\n  --version             show program's version number and exit\n"
+    },
+    {
+      "engine": "ffmpeg",
+      "version": "ffmpeg version n9.0.2-17-g2a571b6068-20260930 Copyright (c) 2000-2026 the FFmpeg developers\nbuilt with gcc 16.2.0 (crosstool-NG 1.29.0.7_b1a94f6)\nconfiguration: --prefix=/ffbuild/prefix --pkg-config-flags=--static --pkg-config=pkg-config --cross-prefix=x86_64-ffbuild-linux-gnu- --arch=x86_64 --target-os=linux --enable-gpl --enable-version3 --disable-debug --enable-iconv --enable-zlib --enable-libxml2 --enable-libsoxr --enable-openssl --enable-libvmaf --enable-libxcb --enable-xlib --enable-fontconfig --enable-libharfbuzz --enable-libfreetype --enable-libfribidi --enable-vulkan --enable-libdav1d"
+    },
+    {
+      "engine": "dwg2dxf",
+      "version": "dwg2dxf 0.14\n"
+    },
+    {
+      "health": {
+        "status": "ok",
+        "version": "1.0.0",
+        "running": 0,
+        "queued": 0,
+        "workers": 2
+      }
+    },
+    {
+      "operation": "image_convert",
+      "state": "succeeded",
+      "bytes": 82
+    },
+    {
+      "operation": "cad_convert",
+      "state": "succeeded",
+      "bytes": 485
+    },
+    {
+      "operation": "office_convert",
+      "state": "succeeded",
+      "bytes": 13133
+    },
+    {
+      "operation": "media_audio",
+      "state": "succeeded",
+      "bytes": 3788
+    }
+  ],
+  "catalog": {
+    "image_convert": true,
+    "image_resize": true,
+    "images_pdf": true,
+    "pdf_images": true,
+    "pdf_merge": true,
+    "pdf_split": true,
+    "pdf_extract": true,
+    "pdf_rotate": true,
+    "pdf_compress": true,
+    "pdf_text": true,
+    "pdf_watermark": true,
+    "pdf_numbers": true,
+    "pdf_encrypt": true,
+    "pdf_decrypt": true,
+    "pdf_docx": true,
+    "pdf_docx_image": true,
+    "office_convert": true,
+    "media_convert": true,
+    "media_audio": true,
+    "cad_convert": true,
+    "pdf_ofd": true,
+    "ofd_pdf": true,
+    "svg_convert": true,
+    "archive_convert": true
+  },
+  "server_log": "格式工坊  http://127.0.0.1:50557  | 数据目录：/tmp/format-hub-release-smoke-ord797d6/data\n团队地址：http://192.168.0.35:50557\nINFO:     Started server process [29226]\nINFO:     Waiting for application startup.\nINFO:     Application startup complete.\nINFO:     Uvicorn running on http://127.0.0.1:50557 (Press CTRL+C to quit)\nINFO:     Shutting down\nINFO:     Waiting for application shutdown.\nINFO:     Application shutdown complete.\nINFO:     Finished server process [29226]\n"
+}

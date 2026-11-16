@@ -25,9 +25,14 @@ RUNTIME=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROGRAM="$RUNTIME/office/usr/lib/libreoffice/program"
 export LD_LIBRARY_PATH="$PROGRAM:$RUNTIME/office/usr/lib/x86_64-linux-gnu:${LD_LIBRARY_PATH_ORIG:-}"
 export SAL_USE_VCLPLUGIN=svp
-export URE_BOOTSTRAP="file://$PROGRAM/fundamentalrc"
+uri() { printf 'file://'; printf '%s' "$1" | od -An -v -tx1 | awk '{for(i=1;i<=NF;i++) if($i=="2f") printf "/"; else printf "%%%s", $i}'; }
+export URE_BOOTSTRAP="$(uri "$PROGRAM/fundamentalrc")"
 case "${LC_ALL:-${LANG:-C}}" in C|POSIX) export LC_ALL=C.UTF-8 ;; esac
-exec "$PROGRAM/soffice" "$@"
+PROFILE=$(mktemp -d "${TMPDIR:-/tmp}/format-hub-office-XXXXXX")
+cleanup() { case "$PROFILE" in "${TMPDIR:-/tmp}"/format-hub-office-*) rm -rf -- "$PROFILE" ;; *) printf '%s\\n' 'Unexpected Office profile path' >&2; return 1 ;; esac; }
+trap cleanup EXIT
+export XDG_CACHE_HOME="$PROFILE/cache"
+"$PROGRAM/soffice" "-env:BRAND_BASE_DIR=$(uri "$PROGRAM/..")" "-env:UserInstallation=$(uri "$PROFILE/profile")" "$@"
 '''
 
 
