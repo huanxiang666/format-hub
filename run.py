@@ -10,6 +10,9 @@ from app.paths import ROOT, default_data
 
 
 def main():
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8', errors='replace')
     if len(sys.argv) > 1 and sys.argv[1] == '--worker':
         from app.worker import main as worker_main
         sys.argv = [sys.argv[0], *sys.argv[2:]]
