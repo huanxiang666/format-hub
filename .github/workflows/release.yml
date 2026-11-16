@@ -20,6 +20,7 @@ jobs:
       - name: Install Python build dependencies
         run: python -m pip install -r requirements.lock pyinstaller==6.22.3
       - uses: msys2/setup-msys2@v2
+        id: msys2
         with:
           msystem: MINGW64
           update: false
@@ -27,10 +28,35 @@ jobs:
       - name: Stage private Cairo native dependencies
         shell: pwsh
         run: |
+          $msysRoot = '${{ steps.msys2.outputs.msys2-location }}'
           New-Item -ItemType Directory -Force runtime/native | Out-Null
-          Copy-Item C:/msys64/mingw64/bin/*.dll runtime/native/
+          Copy-Item "$msysRoot/mingw64/bin/*.dll" runtime/native/
           New-Item -ItemType Directory -Force runtime/native-licenses | Out-Null
-          Copy-Item C:/msys64/mingw64/share/licenses/* runtime/native-licenses/ -Recurse
+          foreach ($candidate in @("$msysRoot/mingw64/share/licenses", "$msysRoot/usr/share/licenses")) {
+            if (Test-Path $candidate) {
+              Copy-Item "$candidate/*" runtime/native-licenses/ -Recurse -Force
+            }
+          }
+          $packageFiles = & "$msysRoot/usr/bin/pacman.exe" -Ql
+          if ($LASTEXITCODE -ne 0) { throw 'Native package file manifest failed' }
+          $packageFiles | Set-Content runtime/native-licenses/msys2-package-files.txt
+          $packageInfo = & "$msysRoot/usr/bin/pacman.exe" -Qi
+          if ($LASTEXITCODE -ne 0) { throw 'Native package metadata failed' }
+          $packageInfo | Set-Content runtime/native-licenses/msys2-package-metadata.txt
+          foreach ($line in $packageFiles) {
+            if ($line -match '^([^ ]+) (/(mingw64|usr)/.*(?:LICENSE|COPYING|COPYRIGHT|NOTICE)[^/]*)$') {
+              $package = $Matches[1]
+              $relative = $Matches[2].TrimStart('/')
+              $source = Join-Path $msysRoot $relative
+              if (Test-Path $source -PathType Leaf) {
+                $target = Join-Path runtime/native-licenses "$package/$relative"
+                New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
+                Copy-Item $source $target -Force
+              }
+            }
+          }
+          $licenseFiles = Get-ChildItem runtime/native-licenses -Recurse -File | Where-Object { $_.Name -notlike 'msys2-package-*' }
+          if (!$licenseFiles) { throw 'No upstream native license files were found in package manifests' }
           $env:PATH = "$pwd/runtime/native;$env:PATH"
           @'
           import cairosvg
