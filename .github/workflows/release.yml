@@ -1,0 +1,72 @@
+name: Build verified Windows release
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install Python build dependencies
+        run: python -m pip install -r requirements.lock pyinstaller==6.22.3
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-cairo
+      - name: Stage private Cairo native dependencies
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force runtime/native | Out-Null
+          Copy-Item C:/msys64/mingw64/bin/*.dll runtime/native/
+          New-Item -ItemType Directory -Force runtime/native-licenses | Out-Null
+          Copy-Item C:/msys64/mingw64/share/licenses/* runtime/native-licenses/ -Recurse
+          $env:PATH = "$pwd/runtime/native;$env:PATH"
+          @'
+          import cairosvg
+          assert cairosvg.svg2png(bytestring=b'<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"/>')
+          '@ | python -
+      - name: Download and verify LibreDWG and Office private runtime
+        shell: pwsh
+        run: |
+          python bootstrap.py --engine windows-dwg
+          python bootstrap.py --engine windows-office
+          & ./runtime/dwg/dwg2dxf.exe --version
+          if ($LASTEXITCODE -ne 0) { throw 'LibreDWG version failed' }
+          & ./runtime/libreoffice/program/soffice.exe --headless --version
+          if ($LASTEXITCODE -ne 0) { throw 'LibreOffice private MSI image failed' }
+      - name: Verify downloader security boundaries
+        run: python -m unittest discover -s packaging -p test_bootstrap.py -v
+      - name: Build onedir with Python, FFmpeg, LibreDWG and fonts
+        run: python build_release.py --skip-office
+      - name: Smoke actual frozen executable
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem packaging/dist -Directory | Select-Object -First 1
+          New-Item -ItemType Directory -Force "$($bundle.FullName)/runtime/libreoffice" | Out-Null
+          Copy-Item runtime/libreoffice/* "$($bundle.FullName)/runtime/libreoffice/" -Recurse
+          python packaging/smoke_release.py "$($bundle.FullName)/format-hub.exe" --office --report packaging/windows-smoke.json
+          if ($LASTEXITCODE -ne 0) { throw 'Frozen smoke failed' }
+          # The archive was generated before this test-only Office copy, keeping the public
+          # package compact. First launch downloads the exact same verified private image.
+      - name: Upload build artifacts for main-agent review
+        uses: actions/upload-artifact@v4
+        with:
+          name: format-hub-windows-x64-v1.1.0
+          compression-level: 0
+          path: |
+            packaging/dist/*.zip
+            packaging/dist/*.sha256
+            packaging/dist/*.json
+            packaging/windows-smoke.json
+          if-no-files-found: error
