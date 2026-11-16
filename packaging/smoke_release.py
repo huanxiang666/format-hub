@@ -90,6 +90,7 @@ def main():
                     report['catalog'] = {item['id']: item['available'] for item in catalog}
                     image = io.BytesIO(); Image.new('RGB', (32, 24), '#2b7bda').save(image, 'PNG')
                     samples = [('image_convert', 'sample.png', image.getvalue(), {'target': 'webp'})]
+                    samples.append(('svg_convert', 'sample.svg', b'<svg xmlns="http://www.w3.org/2000/svg" width="32" height="24"><rect width="32" height="24" fill="#2b7bda"/></svg>', {'target': 'png'}))
                     # A real, tiny valid DXF; no project user input is read.
                     import ezdxf
                     drawing = ezdxf.new('R2010'); drawing.modelspace().add_line((0, 0), (10, 10))
@@ -136,6 +137,10 @@ def main():
                         assert result.content
                         if operation == 'image_convert':
                             assert Image.open(io.BytesIO(result.content)).format == 'WEBP'
+                        elif operation == 'svg_convert':
+                            rendered = Image.open(io.BytesIO(result.content))
+                            assert rendered.format == 'PNG' and rendered.size == (32, 24)
+                            assert rendered.convert('RGB').getpixel((16, 12)) == (43, 123, 218)
                         elif operation == 'office_convert':
                             assert result.content.startswith(b'%PDF')
                         elif operation == 'cad_convert':

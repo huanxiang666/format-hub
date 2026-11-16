@@ -54,7 +54,7 @@ jobs:
               assert release['build_commit']==build['head_sha'] and data['offline']
               assert any(c.get('offline_download_rejected') for c in data['checks'])
               operations={c.get('operation'):c for c in data['checks'] if 'operation' in c}
-              for name in ['image_convert','cad_convert','office_convert','media_audio']:
+              for name in ['image_convert','svg_convert','cad_convert','office_convert','media_audio']:
                   assert operations[name]['state']=='succeeded' and operations[name]['bytes']>0
               archive, = root.rglob(data['archive']['name'])
               digest=hashlib.file_digest(archive.open('rb'),'sha256').hexdigest()
