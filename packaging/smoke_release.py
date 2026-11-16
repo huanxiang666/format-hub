@@ -93,7 +93,15 @@ def main():
                                 rows = rows.get('jobs', [])
                             job = next(row for row in rows if row['id'] == job_id)
                             if job['state'] in ('failed', 'cancelled'):
-                                raise RuntimeError(json.dumps(job, ensure_ascii=False) + '\n' + log.read_text(errors='replace'))
+                                details = []
+                                job_dir = temporary / 'data/jobs' / job_id
+                                for diagnostic in sorted(job_dir.glob('*.log')):
+                                    text = diagnostic.read_text(encoding='utf-8', errors='replace')[-16000:]
+                                    details.append(diagnostic.name + ':\n' + text)
+                                    if args.report:
+                                        args.report.parent.mkdir(parents=True, exist_ok=True)
+                                        args.report.with_name('windows-worker-' + job_id + '-' + diagnostic.name).write_text(text, encoding='utf-8')
+                                raise RuntimeError(json.dumps(job, ensure_ascii=False) + '\n' + log.read_text(errors='replace') + '\n' + '\n'.join(details))
                             if job['state'] == 'succeeded':
                                 break
                             time.sleep(0.2)

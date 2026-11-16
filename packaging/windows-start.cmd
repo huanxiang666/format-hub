@@ -8,5 +8,5 @@ if errorlevel 1 (
   echo 可稍后重试，或按 Ctrl+C 退出。
   pause
 )
-format-hub.exe --host 127.0.0.1
+format-hub.exe --host 0.0.0.0
 pause
