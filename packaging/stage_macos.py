@@ -22,8 +22,39 @@ def macho(path):
         return stream.read(4) in MAGIC
 
 
+def load_commands(path):
+    dependencies, rpaths = [], []
+    command = ''
+    loads = {'LC_LOAD_DYLIB', 'LC_LOAD_WEAK_DYLIB', 'LC_REEXPORT_DYLIB', 'LC_LOAD_UPWARD_DYLIB', 'LC_LAZY_LOAD_DYLIB'}
+    for line in run('otool', '-l', str(path)).splitlines():
+        line = line.strip()
+        if line.startswith('cmd '):
+            command = line.split()[1]
+        elif command in loads and line.startswith('name '):
+            dependencies.append(line[5:].rsplit(' (offset ', 1)[0])
+        elif command == 'LC_RPATH' and line.startswith('path '):
+            rpaths.append(line[5:].rsplit(' (offset ', 1)[0])
+    return dependencies, rpaths
+
+
 def dependencies(path):
-    return [line.strip().split(' (compatibility', 1)[0] for line in run('otool', '-L', str(path)).splitlines()[1:]]
+    return load_commands(path)[0]
+
+
+def resolve_dependency(source, dependency, rpaths, executable_dir):
+    def expand(value):
+        return Path(value.replace('@loader_path', str(source.parent)).replace('@executable_path', str(executable_dir)))
+    if dependency.startswith('@rpath/'):
+        suffix = dependency.removeprefix('@rpath/')
+        candidates = [expand(path) / suffix for path in rpaths]
+    elif dependency.startswith(('/', '@loader_path/', '@executable_path/')):
+        candidates = [expand(dependency)]
+    else:
+        raise RuntimeError(f'Unresolved native load command {source}: {dependency}')
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    raise RuntimeError(f'Native dependency missing: {source}: {dependency}; searched {candidates}')
 
 
 def audit_office(app):
@@ -62,18 +93,12 @@ def main():
         shutil.copy2(source, target)
         copies[source] = target
         edges[source] = []
-        for dependency in dependencies(source):
+        loads, rpaths = load_commands(source)
+        for dependency in loads:
             if dependency.startswith(SYSTEM):
                 continue
-            if dependency.startswith('@loader_path/'):
-                resolved = source.parent / dependency.removeprefix('@loader_path/')
-            elif dependency.startswith('/'):
-                resolved = Path(dependency)
-            else:
-                raise RuntimeError(f'Unresolved native load command {source}: {dependency}')
-            if not resolved.exists():
-                raise RuntimeError(f'Native dependency missing: {resolved}')
-            edges[source].append((dependency, resolved.resolve()))
+            resolved = resolve_dependency(source, dependency, rpaths, roots[1] / 'bin')
+            edges[source].append((dependency, resolved))
             pending.append(resolved)
     for source, target in copies.items():
         target.chmod(0o755)

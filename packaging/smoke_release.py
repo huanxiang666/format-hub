@@ -50,7 +50,7 @@ def main():
         report['checks'].append({'help': help_result.stdout})
         for filename, flag in [('ffmpeg.exe' if os.name == 'nt' else 'ffmpeg', '-version'), ('dwg/dwg2dxf.exe' if os.name == 'nt' else 'dwg2dxf', '--version')]:
             engine = binary.parent / 'runtime' / filename
-            result = subprocess.run([str(engine), flag], cwd=temporary, capture_output=True, text=True, timeout=30, check=True)
+            result = subprocess.run([str(engine), flag], cwd=temporary, env=env, capture_output=True, text=True, timeout=30, check=True)
             report['checks'].append({'engine': filename, 'version': result.stdout[:600]})
         with socket.socket() as sock:
             sock.bind(('127.0.0.1', 0)); port = sock.getsockname()[1]
