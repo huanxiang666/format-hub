@@ -31,6 +31,7 @@ packaging/*build*.log
 packaging/*audit*.json
 packaging/release-result.json
 packaging/*published*.json
+packaging/*-dist/
 runtime/LibreOffice.app/
 runtime/libreoffice/
 runtime/dwg/
