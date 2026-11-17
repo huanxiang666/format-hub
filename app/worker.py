@@ -30,7 +30,7 @@ def main():
         if sys.platform == 'linux':
             import resource
             memory_mb = int(os.environ.get('FORMAT_HUB_MEMORY_MB', '2048'))
-            for limit, desired in [(resource.RLIMIT_AS, memory_mb * 1024**2), (resource.RLIMIT_FSIZE, 1024**3), (resource.RLIMIT_NOFILE, 512)]:
+            for limit, desired in [(resource.RLIMIT_AS, memory_mb * 1024**2), (resource.RLIMIT_FSIZE, int(os.environ.get('FORMAT_HUB_JOB_MB', '1024')) * 1024**2), (resource.RLIMIT_NOFILE, 512)]:
                 soft, hard = resource.getrlimit(limit)
                 ceiling = desired if hard == resource.RLIM_INFINITY else min(desired, hard)
                 resource.setrlimit(limit, (ceiling if soft == resource.RLIM_INFINITY else min(soft, ceiling), hard))
@@ -113,7 +113,15 @@ def main():
         code = 0
     except Exception as exc:
         traceback.print_exc()
-        message = str(exc).replace(str(directory), '[任务目录]')
+        import errno
+        cause = exc
+        over_budget = False
+        while cause is not None:
+            if isinstance(cause, OSError) and cause.errno == errno.EFBIG:
+                over_budget = True
+                break
+            cause = cause.__cause__
+        message = ('此任务生成的文件超过容量预算，请减小输入或输出尺寸' if over_budget else str(exc)).replace(str(directory), '[任务目录]')
         result = {'ok': False, 'outputs': [], 'error': message[:500] or '文件内容解析失败，请检查格式'}
         code = 1
     if ipc_directory is not None:

@@ -9,7 +9,9 @@
     tools: [], limits: {}, category: 'all', query: '', selected: null,
     drafts: new Map(), session: { required: false, authenticated: false }, sessionReady: false,
     jobs: [], jobsLoaded: false, submitting: false, pendingJobs: new Set(),
-    polling: false, pollTimer: null, jobsSignature: '', sessionEpoch: 0, toastTimer: null
+    polling: false, pollTimer: null, jobsSignature: '', sessionEpoch: 0, toastTimer: null,
+    settings: null, settingsDraft: {}, settingsLoading: false, settingsSaving: false,
+    settingsConflict: false, settingsDirty: false, settingsVersion: 0, catalogVersion: ''
   };
 
   function node(tag, className, text) {
@@ -64,7 +66,7 @@
         const error = new Error((typeof data?.error === 'string' ? data.error : data?.error?.message) || `请求失败（HTTP ${response.status}），请稍后重试。`);
         error.code = data?.error?.code;
         error.status = response.status;
-        if (response.status === 401 && path !== '/api/login') {
+        if (response.status === 401 && path !== '/api/login' && !path.startsWith('/api/admin/')) {
           state.session = { required: true, authenticated: false };
           state.sessionEpoch += 1;
           state.jobs = [];
@@ -83,6 +85,132 @@
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  function settingsMessage(message, error = false) {
+    showMessage('settings-message', message);
+    $('settings-message').classList.toggle('is-error', error);
+  }
+
+  function renderRuntime() {
+    const running = state.jobs.filter((job) => job.state === 'running').length;
+    const queued = state.jobs.filter((job) => job.state === 'queued').length;
+    const workers = state.settings?.values?.workers ?? state.limits.workers;
+    const cpu = state.settings?.host?.cpu_count;
+    $('settings-runtime').textContent = `主机 CPU：${cpu ?? '—'} 核 · 并发：${workers ?? '—'} 个任务 · 当前会话：${running} 个运行 / ${queued} 个排队`;
+  }
+
+  function updateSettingsControls() {
+    const editable = Boolean(state.settings?.can_edit);
+    $('settings-fields').disabled = !editable || state.settingsLoading || state.settingsSaving;
+    $('settings-save').disabled = !editable || !state.settingsDirty || state.settingsConflict || state.settingsLoading || state.settingsSaving;
+    $('settings-save').textContent = state.settingsSaving ? '正在保存…' : '保存并生效';
+    $('settings-reload').disabled = state.settingsLoading || state.settingsSaving;
+    $('settings-dirty').textContent = state.settingsLoading ? '正在读取设置…' : state.settingsSaving ? '正在保存配置…' : state.settingsConflict ? '版本冲突，草稿已保留' : state.settingsDirty ? '有未保存的更改' : editable ? '已与服务端配置同步' : '当前为只读配置';
+    $('admin-login-form').hidden = !state.settings?.needs_admin_login || editable;
+    renderRuntime();
+  }
+
+  function renderSettingsFields() {
+    const container = $('settings-fields');
+    container.replaceChildren();
+    for (const field of state.settings.fields) {
+      if (!field || typeof field.key !== 'string' || !(field.key in state.settings.values)) continue;
+      const label = node('label', 'field');
+      const input = node('input');
+      input.id = `setting-${field.key}`;
+      input.name = field.key;
+      input.type = 'number'; input.step = '1'; input.required = true;
+      if (Number.isFinite(field.min)) input.min = field.min;
+      if (Number.isFinite(field.max)) input.max = field.max;
+      input.value = String(state.settingsDraft[field.key] ?? '');
+      const help = node('span', 'editor-help', [field.description, Number.isFinite(field.min) && Number.isFinite(field.max) ? `范围 ${field.min}–${field.max}${field.unit ? ` ${field.unit}` : ''}` : ''].filter(Boolean).join('；'));
+      help.id = `${input.id}-help`;
+      input.setAttribute('aria-describedby', help.id);
+      const row = node('span', 'settings-input-row');
+      row.append(input, node('span', '', field.unit || ''));
+      label.htmlFor = input.id;
+      label.append(node('span', '', field.label || field.key), row, help);
+      input.addEventListener('input', () => {
+        state.settingsDraft[field.key] = input.value;
+        state.settingsDirty = state.settings.fields.some((item) => String(state.settingsDraft[item.key] ?? '') !== String(state.settings.values[item.key] ?? ''));
+        if (!state.settingsConflict) settingsMessage('');
+        updateSettingsControls();
+      });
+      container.append(label);
+    }
+    updateSettingsControls();
+  }
+
+  async function loadSettings(replaceDraft = false) {
+    if (state.settingsLoading || state.settingsSaving) return;
+    if (replaceDraft && state.settingsDirty && !window.confirm('重新载入会放弃当前设置草稿，继续？')) return;
+    const version = ++state.settingsVersion;
+    state.settingsLoading = true;
+    updateSettingsControls();
+    try {
+      const result = await api('/api/settings');
+      if (version !== state.settingsVersion) return;
+      if (!result?.values || !Array.isArray(result.fields) || result.revision === undefined) throw new Error('设置数据不完整，请重新载入。');
+      state.settings = state.settingsDirty && !replaceDraft && state.settings ? { ...result, values: state.settings.values, revision: state.settings.revision } : result;
+      if (replaceDraft || !state.settingsDirty) {
+        state.settingsDraft = { ...result.values };
+        state.settingsDirty = false; state.settingsConflict = false;
+        renderSettingsFields();
+      }
+      settingsMessage(result.can_edit ? '' : result.needs_admin_login ? '配置需要管理员解锁后保存。' : '当前仅可查看设置，请先完成团队登录或联系管理员。');
+      return true;
+    } catch (error) { settingsMessage(error.message, true); return false; }
+    finally { state.settingsLoading = false; updateSettingsControls(); }
+  }
+
+  function refreshConfiguration(values) {
+    Object.assign(state.limits, values);
+    $('version-label').textContent = `格式工坊${state.catalogVersion ? ` v${state.catalogVersion}` : ''}${state.limits.workers ? ` / ${state.limits.workers} 个处理进程` : ''}`;
+    if (state.limits.retention_hours) $('retention-note').textContent = `转换文件保留 ${state.limits.retention_hours} 小时，请及时下载需要的结果。`;
+    if (state.selected) renderUploadLimits();
+    renderRuntime();
+  }
+
+  async function saveSettings(event) {
+    event.preventDefault();
+    if ($('settings-save').disabled || !$('settings-form').reportValidity()) return;
+    const values = {};
+    for (const field of state.settings.fields) {
+      if (!(field.key in state.settings.values)) continue;
+      const value = Number(state.settingsDraft[field.key]);
+      if (!Number.isSafeInteger(value)) { settingsMessage('所有配置必须填写整数。', true); return; }
+      values[field.key] = value;
+    }
+    state.settingsSaving = true;
+    updateSettingsControls(); settingsMessage('');
+    try {
+      const result = await api('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ values, revision: state.settings.revision }) });
+      if (!result?.values || !Array.isArray(result.fields) || result.revision === undefined) throw new Error('保存响应不完整，请重新载入确认配置。');
+      state.settings = result; state.settingsDraft = { ...result.values };
+      state.settingsDirty = false; state.settingsConflict = false;
+      renderSettingsFields(); refreshConfiguration(result.values);
+      settingsMessage('配置已保存并生效；新提交的任务使用新配置，已排队及运行中的任务保留提交时参数。');
+      toast('运行设置已保存。');
+    } catch (error) {
+      if (error.status === 409) { state.settingsConflict = true; settingsMessage('配置已被其他人修改。当前草稿已保留，请记录修改后点击“重新载入”获取最新配置，再重新填写保存。', true); }
+      else { if (error.status === 403) { state.settings.can_edit = false; state.settings.needs_admin_login = true; } settingsMessage(error.message, true); }
+    } finally { state.settingsSaving = false; updateSettingsControls(); }
+  }
+
+  async function adminLogin(event) {
+    event.preventDefault();
+    const button = $('admin-login-submit');
+    if (button.disabled) return;
+    const token = $('admin-token').value;
+    if (!token) return;
+    button.disabled = true; settingsMessage('');
+    $('admin-token').value = '';
+    try {
+      await api('/api/admin/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) });
+      if (await loadSettings() && state.settings?.can_edit) settingsMessage('管理员已解锁，可编辑并保存配置。');
+    } catch (error) { settingsMessage(error.message, true); }
+    finally { button.disabled = false; }
   }
 
   function bytes(value) {
@@ -106,7 +234,7 @@
   let editorDraft;
   let inspectTimer = null;
   const isPdfInspect = (tool = state.selected) => ['pdf_split', 'pdf_merge'].includes(tool?.id);
-  const isMultiple = (tool = state.selected) => tool?.id !== 'image_resize' && (tool?.id === 'pdf_merge' || Boolean(tool?.multiple));
+  const isMultiple = (tool = state.selected) => tool?.id !== 'image_resize' && (['pdf_merge', 'cad_convert'].includes(tool?.id) || Boolean(tool?.multiple));
   const readableError = (error) => typeof error === 'string' ? error : error?.message || '文件读取失败，请检查文件后重试。';
   const optionLabels = { mode: '尺寸模式', background: '画布底色', quality: '图片质量（1–100，越高越清晰）', width: '目标宽度（像素，0 为按比例）', height: '目标高度（像素，0 为按比例）', rotate: '旋转角度（顺时针）', max_kb: '目标体积上限（KB，0 为不限）', dpi: '输出分辨率（DPI）', cad_quality: '图纸输出质量' };
   const choiceLabels = { contain: '等比完整', cover: '居中裁剪铺满', stretch: '拉伸', white: '白色', red: '红色', blue: '蓝色', transparent: '透明', fast: '快速', balanced: '均衡', high: '高质量' };
@@ -219,8 +347,8 @@
     $('file-input').multiple = isMultiple(tool);
     $('file-picker-help').textContent = tool.id === 'pdf_merge' ? '可一次选择多个 PDF：按住 Ctrl / Shift 多选；也可重复选择追加，再用上下箭头排序合并。' : tool.id === 'pdf_split' ? '先上传 PDF 查看真实页数与页面预览，再填写拆分页码范围。' : tool.id === 'image_resize' ? '每次编辑一张图片。裁剪框仅对应当前原图；其他图片转换工具支持批量。' : '或从电脑中选择文件，按住 Ctrl / Shift 可多选并重复追加。';
     $('file-input').value = '';
-    const maxCount = isMultiple(tool) ? state.limits.max_files : 1;
-    $('upload-limits').textContent = [state.limits.max_file_mb ? `单文件不超过 ${state.limits.max_file_mb} MB` : '', maxCount ? `每次最多 ${maxCount} 个文件` : '', isMultiple(tool) ? '可按顺序批量添加' : '每次处理 1 个文件'].filter(Boolean).join('，');
+    renderUploadLimits();
+    if (tool.id === 'cad_convert') $('file-picker-help').textContent = '可一次选择多张图纸；每个文件独立任务、按并发数处理，限时按单个图纸计算。';
     const select = $('target-format');
     select.replaceChildren();
     for (const target of tool.targets || []) {
@@ -236,6 +364,11 @@
     showMessage('file-error', '');
     showMessage('submit-error', '');
     renderFiles();
+  }
+
+  function renderUploadLimits() {
+    const maxCount = isMultiple() ? state.limits.max_files : 1;
+    $('upload-limits').textContent = [state.limits.max_file_mb ? `单文件不超过 ${state.limits.max_file_mb} MB` : '', maxCount ? `每次最多 ${maxCount} 个文件` : '', state.selected?.id === 'cad_convert' ? '每个文件独立任务、按并发数处理' : isMultiple() ? '可按顺序批量添加' : '每次处理 1 个文件'].filter(Boolean).join('，');
   }
 
   function renderOptions(tool, current) {
@@ -452,7 +585,7 @@
       $('file-list').append(row);
     });
     $('files-heading').hidden = !files.length;
-    $('files-summary').textContent = `${files.length} 个文件，共 ${bytes(files.reduce((total, file) => total + file.size, 0))}。${state.selected?.id === 'image_resize' ? '当前图片独立编辑。' : '列表顺序即处理 / 合并顺序。'}`;
+    $('files-summary').textContent = `${files.length} 个文件，共 ${bytes(files.reduce((total, file) => total + file.size, 0))}。${state.selected?.id === 'image_resize' ? '当前图片独立编辑。' : state.selected?.id === 'cad_convert' ? '每个文件独立任务、按并发数处理。' : '列表顺序即处理 / 合并顺序。'}`;
     renderInspection();
     renderImageEditor();
     renderFonts();
@@ -474,7 +607,8 @@
     const current = draft();
     const count = current?.files.length || 0;
     const inspectBlocked = isPdfInspect() && (current?.inspectPending || !count || current.files.some((file) => { const item = current.inspections.get(file); return !item || item.error || !Number.isInteger(item.pages) || item.pages < 1; }));
-    $('convert-button').disabled = !canUseWorkspace() || !state.selected?.available || !count || state.submitting || inspectBlocked;
+    const uncertain = current?.files.some((file) => current.uncertainFiles?.has(file));
+    $('convert-button').disabled = !canUseWorkspace() || !state.selected?.available || !count || state.submitting || inspectBlocked || uncertain;
     $('convert-label').textContent = state.submitting ? '正在提交…' : '开始转换';
     $('submit-summary').textContent = state.submitting ? '正在上传并创建任务，请稍候' : count ? `已准备 ${count} 个文件` : '添加文件后即可开始';
     $('submit-help').textContent = !state.sessionReady ? '正在确认会话状态。' : !canUseWorkspace() ? '请先登录工作台。' : !state.selected?.available ? '补全此工具的依赖后即可使用。' : '转换会在后台运行，可继续处理其他文件。';
@@ -490,6 +624,7 @@
     imageEditor?.setDisabled(state.submitting);
     $('fonts-input').disabled = state.submitting;
     if (inspectBlocked && count && !state.submitting) $('submit-help').textContent = current.inspectPending ? '请等待 PDF 页数与预览读取完成。' : '请先成功读取 PDF；加密文件请填写密码并重新读取。';
+    if (uncertain) $('submit-help').textContent = '同名同大小文件的接受状态待确认，请核对任务队列并移除待确认文件后再提交。';
   }
 
   async function submitJob(event) {
@@ -504,23 +639,43 @@
     if (selected.id === 'cad_convert') for (const file of current.fonts) body.append('fonts', file, file.name);
     body.append('operation', selected.id);
     const options = { ...current.options, target: current.target };
+    if (selected.id === 'cad_convert') options.batch_mode = 'separate';
     if (!['jpg', 'jpeg', 'webp'].includes(current.target)) delete options.max_kb;
     body.append('options', JSON.stringify(options));
     state.submitting = true;
+    showMessage('batch-status', '');
     showMessage('submit-error', '');
     updateSubmit();
     renderFiles();
     try {
       const result = await api('/api/jobs', { method: 'POST', body });
-      current.files = [];
-      delete current.options.crop;
+      const acceptedJobs = Array.isArray(result?.jobs) ? result.jobs.filter((job) => job?.id) : result?.id ? [result] : [];
+      if (!acceptedJobs.length) throw new Error('服务未返回已接受的任务，文件已保留；请先刷新队列确认后重试。');
+      let acceptedCount = submittedFiles.length;
+      if (selected.id === 'cad_convert') {
+        const remaining = [...submittedFiles];
+        for (const job of acceptedJobs) {
+          for (const file of Array.isArray(job.files) ? job.files : []) {
+            const matches = remaining.map((item, index) => ({ item, index })).filter(({ item }) => item.name === file.name && Number(file.size) === item.size);
+            if (matches.length === 1) remaining.splice(matches[0].index, 1);
+          }
+        }
+        acceptedCount = acceptedJobs.reduce((count, job) => count + (Array.isArray(job.files) ? job.files.length : 1), 0);
+        if (acceptedJobs.length === submittedFiles.length) { current.files = []; acceptedCount = submittedFiles.length; }
+        else {
+          current.files = remaining;
+          current.uncertainFiles = new Set(remaining.filter((file) => acceptedJobs.some((job) => job.files?.some((accepted) => accepted.name === file.name && Number(accepted.size) === file.size))));
+        }
+        showMessage('batch-status', `批提交 ${submittedFiles.length} 个文件 / 已接受 ${acceptedCount} 个，每个文件独立任务、按并发数处理。`);
+        if (current.files.length) showMessage('submit-error', '未接受的文件已保留，请确认队列后重试。');
+      } else current.files = [];
+      if (!current.files.length) delete current.options.crop;
       invalidateInspection(current);
-      toast('转换任务已加入队列，可继续添加其他文件。');
-      if (result?.id) {
-        state.jobs = [result, ...state.jobs.filter((job) => job.id !== result.id)];
-        state.jobsLoaded = true;
-        renderJobs();
-      }
+      toast(selected.id === 'cad_convert' ? `批提交 ${submittedFiles.length} / 已接受 ${acceptedCount} 个文件。` : '转换任务已加入队列，可继续添加其他文件。');
+      const acceptedIds = new Set(acceptedJobs.map((job) => job.id));
+      state.jobs = [...acceptedJobs, ...state.jobs.filter((job) => !acceptedIds.has(job.id))];
+      state.jobsLoaded = true;
+      renderJobs();
       await refreshJobs();
     } catch (error) {
       showMessage('submit-error', error.message);
@@ -631,21 +786,12 @@
     const names = node('p', 'job-files', filenames);
     names.title = filenames;
     card.append(names);
-    if (job.state === 'running' || job.state === 'queued') {
-      const progress = Math.max(0, Math.min(100, Number(job.progress) || 0));
-      const bar = node('div', 'job-progress');
-      bar.setAttribute('role', 'progressbar');
-      bar.setAttribute('aria-label', `${job.tool_name || '转换任务'}进度`);
-      bar.setAttribute('aria-valuemin', '0');
-      bar.setAttribute('aria-valuemax', '100');
-      bar.setAttribute('aria-valuenow', String(progress));
-      const fill = node('span');
-      fill.style.width = `${progress}%`;
-      bar.append(fill);
-      const progressLabel = node('div', 'job-progress-label');
-      progressLabel.append(node('span', '', job.state === 'queued' ? '等待工作进程处理' : '正在处理文件'), node('span', '', `${Math.round(progress)}%`));
-      card.append(bar, progressLabel);
-    }
+    const timing = node('div', 'job-timing');
+    if (Number.isFinite(job.elapsed_seconds)) timing.append(node('span', '', `已用 ${Math.floor(job.elapsed_seconds)} 秒`));
+    if (Number.isFinite(job.timeout_seconds)) timing.append(node('span', '', `限时 ${job.timeout_seconds} 秒 / 任务`));
+    if (job.state === 'queued' && Number.isFinite(job.queue_position)) timing.append(node('span', '', `排队第 ${job.queue_position} 位`));
+    if (job.state === 'running' || job.state === 'queued') timing.append(node('span', '', job.state === 'queued' ? '等待空闲处理进程' : '正在处理，完成后可下载'));
+    if (timing.childElementCount) card.append(timing);
     if (job.error) card.append(node('p', 'job-error', typeof job.error === 'string' ? job.error : job.error.message || '转换失败，请检查源文件与参数后重试。'));
     for (const warning of job.warnings || []) card.append(node('p', 'job-warning', `提示：${warning}`));
     if (job.state === 'failed' && !job.error) card.append(node('p', 'job-error', '转换失败。请检查源文件、目标格式及参数后重试。'));
@@ -682,6 +828,7 @@
 
   function renderJobs() {
     const jobs = state.jobs;
+    renderRuntime();
     const active = jobs.filter((job) => ['queued', 'running'].includes(job.state)).length;
     $('header-active-count').textContent = active;
     $('queue-total').textContent = jobs.length;
@@ -780,10 +927,11 @@
       state.limits = result.limits || {};
       renderCategories();
       renderTools();
-      const initial = state.tools.find((tool) => tool.id === 'pdf_docx') || state.tools.find((tool) => tool.available) || state.tools[0];
-      if (initial) selectTool(initial);
-      $('version-label').textContent = `格式工坊${result.version ? ` v${result.version}` : ''}${state.limits.workers ? ` / ${state.limits.workers} 个处理进程` : ''}`;
-      if (state.limits.retention_hours) $('retention-note').textContent = `转换文件保留 ${state.limits.retention_hours} 小时，请及时下载需要的结果。`;
+      const initial = state.tools.find((tool) => tool.id === state.selected?.id) || state.tools.find((tool) => tool.id === 'pdf_docx') || state.tools.find((tool) => tool.available) || state.tools[0];
+      if (state.selected && initial?.id === state.selected.id) state.selected = initial;
+      else if (initial) selectTool(initial);
+      state.catalogVersion = result.version || '';
+      refreshConfiguration(state.limits);
     } catch (error) {
       const empty = node('div', 'no-tools');
       empty.append(node('p', '', `工具目录加载失败：${error.message}`));
@@ -827,9 +975,19 @@
     await poll();
   }
 
+  $('settings-button').addEventListener('click', () => {
+    $('settings-dialog').showModal();
+    if (!state.settingsDirty) loadSettings();
+    else updateSettingsControls();
+  });
+  $('settings-close').addEventListener('click', () => $('settings-dialog').close());
+  $('settings-dialog').addEventListener('close', () => { $('admin-token').value = ''; $('settings-button').focus(); });
+  $('settings-reload').addEventListener('click', () => loadSettings(true));
+  $('settings-form').addEventListener('submit', saveSettings);
+  $('admin-login-form').addEventListener('submit', adminLogin);
   $('tool-search').addEventListener('input', (event) => { state.query = event.target.value.trim(); renderTools(); });
   document.addEventListener('keydown', (event) => {
-    if (event.key === '/' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName) && !event.ctrlKey && !event.metaKey && !event.altKey) { event.preventDefault(); $('tool-search').focus(); }
+    if (event.key === '/' && !$('settings-dialog').open && !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName) && !event.ctrlKey && !event.metaKey && !event.altKey) { event.preventDefault(); $('tool-search').focus(); }
   });
   $('file-input').addEventListener('change', (event) => addFiles(event.target.files));
   $('target-format').addEventListener('change', (event) => { if (draft()) { const current = draft(); current.target = event.target.value; if (state.selected.id === 'image_resize' && current.options.background === 'transparent' && !['png', 'webp', 'tiff', 'gif', 'ico', 'avif'].includes(current.target)) { current.options.background = 'white'; const input = $('tool-options').querySelector('[data-option="background"]'); if (input) input.value = 'white'; toast('此格式使用白色画布底色；透明背景请选择 PNG/WebP 等格式。'); } updateSubmit(); imageEditor?.refresh(); } });

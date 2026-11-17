@@ -54,7 +54,7 @@ def main():
     except OSError as exc:
         print(f'局域网地址检测失败：{exc}；可使用机器实际IP', flush=True)
     import uvicorn
-    uvicorn.run('app.server:app', host=args.host, port=args.port, workers=1, access_log=False)
+    uvicorn.run('app.server:app', host=args.host, port=args.port, workers=1, access_log=False, proxy_headers=False)
 
 
 if __name__ == '__main__':

@@ -623,12 +623,13 @@ def _media(operation,files,out,options):
     bitrate=_num(options,'audio_bitrate',192,32,512,True)
     crf=_num(options,'crf',23,0,51,True)
     codecs={'mp3':'libmp3lame','wav':'pcm_s16le','flac':'flac','ogg':'libvorbis','m4a':'aac','aac':'aac','opus':'libopus'}
+    threads=max(1,min(int(os.environ.get('FORMAT_HUB_MEDIA_THREADS','2')),16))
     outputs=[]
     for src in files:
         p=_output(out,src.stem+'_converted',target)
         # Auto thread counts scale with host CPUs and exhaust the worker's 2GB
         # address-space budget through decoder frames, filter pools and x264 lookahead.
-        args=[ffmpeg,'-nostdin','-hide_banner','-loglevel','error','-threads','2','-filter_threads','1','-filter_complex_threads','1','-i',src]
+        args=[ffmpeg,'-nostdin','-hide_banner','-loglevel','error','-threads',str(threads),'-filter_threads','1','-filter_complex_threads','1','-i',src]
         if target in audio:
             args+=['-map','0:a:0','-vn','-c:a',codecs[target]]
             if target not in ['wav','flac']:
@@ -643,7 +644,7 @@ def _media(operation,files,out,options):
                 args+=['-c:v','libx264','-crf',str(crf),'-pix_fmt','yuv420p','-vf','pad=ceil(iw/2)*2:ceil(ih/2)*2','-c:a','aac']
                 if target in ['mp4','mov']:
                     args+=['-movflags','+faststart']
-        _run(args+['-threads','2','-n',p])
+        _run(args+['-threads',str(threads),'-n',p])
         if not p.is_file() or not p.stat().st_size:
             raise ValueError('FFmpeg 输出为空')
         outputs.append(p)

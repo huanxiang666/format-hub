@@ -1,6 +1,12 @@
-name: Build verified full v1.2.0 releases
+name: Build verified full releases
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: Application version (must match app.version.VERSION)
+        required: true
+        default: '1.3.0'
+        type: string
 permissions:
   contents: read
 jobs:
@@ -27,6 +33,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Verify requested application version
+        shell: python
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          import os,re
+          from app.version import VERSION
+          requested=os.environ['RELEASE_VERSION']
+          assert re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+',requested),requested
+          assert VERSION==requested,(VERSION,requested)
+          print('Verified application version',VERSION)
       - name: Install Windows Python dependencies
         if: runner.os == 'Windows'
         run: python -m pip install -r requirements.lock pyinstaller==6.22.3
@@ -76,6 +93,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Office install failed' }
       - name: Test installation boundaries
         run: python -m unittest discover -s packaging -p test_*.py -v
+      - name: Test runtime settings, scheduling and engine contracts on macOS
+        if: runner.os == 'macOS'
+        run: python -m pytest tests/test_settings.py tests/test_media_threads.py tests/test_release_runtime.py -q
+      - name: Test portable runtime contracts on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:PATH = "$pwd/runtime/native;$env:PATH"
+          # Windows chmod has no POSIX 0600 semantics; unprivileged symlinks are not portable.
+          python -m pytest tests/test_settings.py tests/test_media_threads.py tests/test_release_runtime.py -q -k "not test_loopback_no_extra_password_and_generated_token_mode and not test_revision_race_and_atomic_failure and not test_offline_ignores_host_engines_and_requires_private_files"
+          if ($LASTEXITCODE -ne 0) { throw 'Runtime contract tests failed' }
       - name: Build full Windows archive including Office
         if: runner.os == 'Windows'
         shell: pwsh
@@ -111,7 +139,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: format-hub-full-${{ matrix.platform }}-${{ matrix.arch }}-v1.2.0
+          name: format-hub-full-${{ matrix.platform }}-${{ matrix.arch }}-v${{ inputs.version }}
           compression-level: 0
           path: |
             packaging/dist/*.zip

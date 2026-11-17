@@ -5,6 +5,8 @@ import asyncio
 from contextlib import asynccontextmanager
 import hashlib
 import hmac
+import ipaddress
+import threading
 import json
 import logging
 import os
@@ -23,18 +25,19 @@ from fastapi import FastAPI, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.exceptions import HTTPException
 from starlette.formparsers import MultiPartParser, MultiPartException
 
 from app.engines import catalog
 from app.paths import ROOT, default_data
 from app.version import VERSION
+from app.settings import Settings, SettingsStore, SettingsUpdate, RevisionConflict, environment_defaults, fields as settings_fields
 
 DATA = Path(os.environ.get('FORMAT_HUB_DATA', str(default_data()))).resolve()
 MAX_MB = int(os.environ.get('FORMAT_HUB_MAX_FILE_MB', '200'))
 MAX_FILES = int(os.environ.get('FORMAT_HUB_MAX_FILES', '30'))
-WORKERS = max(1, min(int(os.environ.get('FORMAT_HUB_WORKERS', '2')), 8))
+WORKERS = max(1, min(int(os.environ.get('FORMAT_HUB_WORKERS', '2')), 32))
 QUEUE_LIMIT = int(os.environ.get('FORMAT_HUB_QUEUE_LIMIT', '40'))
 TIMEOUT = int(os.environ.get('FORMAT_HUB_TIMEOUT', '600'))
 RETENTION = int(os.environ.get('FORMAT_HUB_RETENTION_HOURS', '24'))
@@ -47,6 +50,70 @@ STORAGE_MB = int(os.environ.get('FORMAT_HUB_STORAGE_MB', '10240'))
 MIN_FREE_MB = int(os.environ.get('FORMAT_HUB_MIN_FREE_MB', '512'))
 queue: asyncio.Queue[str]
 slots: asyncio.Semaphore
+settings_store: SettingsStore | None = None
+ADMIN_COOKIE = 'format_hub_admin_session'
+admin_token = ''
+admin_sessions: dict[str, tuple[str, float]] = {}
+admin_attempts: dict[str, list[float]] = {}
+admin_lock = threading.Lock()
+worker_condition: asyncio.Condition | None = None
+running_workers = 0
+
+
+class Capacity:
+    """Event-loop owned admission counter, independent of the running-work limit."""
+    def __init__(self, limit):
+        self.limit, self.used = limit, 0
+
+    @property
+    def _value(self):
+        return max(0, self.limit - self.used)
+
+    def locked(self):
+        return self.used >= self.limit
+
+    async def acquire(self):
+        if self.locked():
+            raise Problem(429, 'queue_full', '转换队列已满，请稍后提交')
+        self.used += 1
+
+    def reserve(self, count):
+        if self.used + count > self.limit:
+            raise Problem(429, 'queue_full', '整批任务超过剩余队列容量，请稍后提交')
+        self.used += count
+
+    def release(self):
+        self.used = max(0, self.used - 1)
+
+
+def apply_settings(values):
+    global WORKERS, TIMEOUT, RETENTION, MAX_MB, MAX_FILES, QUEUE_LIMIT, STORAGE_MB, MIN_FREE_MB
+    WORKERS, TIMEOUT = values.workers, values.timeout_seconds
+    RETENTION, MAX_MB, MAX_FILES = values.retention_hours, values.max_file_mb, values.max_files
+    QUEUE_LIMIT, STORAGE_MB, MIN_FREE_MB = values.queue_limit, values.storage_mb, values.min_free_mb
+    if isinstance(globals().get('slots'), Capacity):
+        slots.limit = QUEUE_LIMIT + WORKERS
+
+
+def runtime_snapshot(operation):
+    values = settings_store.values if settings_store is not None else environment_defaults()
+    return {'timeout_seconds': values.cad_timeout_seconds if operation == 'cad_convert' else TIMEOUT,
+            'memory_mb': values.memory_mb, 'media_threads': values.media_threads, 'job_mb': values.job_mb}
+
+
+def read_spec(job_id):
+    try:
+        return json.loads((DATA / 'jobs' / job_id / 'spec.json').read_text(encoding='utf-8'))
+    except (FileNotFoundError, ValueError):
+        return {}
+
+
+def worker_environment(runtime):
+    return {**os.environ, 'FORMAT_HUB_PARENT_PID': str(os.getpid()),
+            'FORMAT_HUB_TIMEOUT': str(runtime['timeout_seconds']),
+            'FORMAT_HUB_MEMORY_MB': str(runtime['memory_mb']),
+            'FORMAT_HUB_MEDIA_THREADS': str(runtime['media_threads']),
+            'FORMAT_HUB_JOB_MB': str(runtime['job_mb'])}
 
 
 def db():
@@ -88,6 +155,14 @@ def view(row):
         f.pop('stored', None)
     for f in result['outputs']:
         f['url'] = f"/api/jobs/{result['id']}/files/{f['name']}"
+    spec = read_spec(result['id'])
+    result['timeout_seconds'] = spec.get('runtime', {}).get('timeout_seconds', TIMEOUT)
+    result['batch_id'] = spec.get('batch_id')
+    result['elapsed_seconds'] = max(0, int((result['finished_at'] or time.time()) - result['started_at'])) if result['started_at'] else 0
+    result['queue_position'] = None
+    if result['state'] == 'queued':
+        with db() as c:
+            result['queue_position'] = c.execute("SELECT COUNT(*) FROM jobs WHERE state='queued' AND (created_at<? OR (created_at=? AND id<=?))", (result['created_at'], result['created_at'], result['id'])).fetchone()[0]
     result['progress'] = 100 if result['state'] == 'succeeded' else (40 if result['state'] == 'running' else 0)
     return result
 
@@ -200,8 +275,19 @@ class LimitedMultipartParser(MultiPartParser):
 
 
 async def worker():
+    global running_workers
     while True:
-        job_id = await queue.get()
+        # The condition protects both dequeue and run admission: no worker holds
+        # a queue item while waiting for a lowered concurrency limit.
+        admitted = False
+        if worker_condition is not None:
+            async with worker_condition:
+                await worker_condition.wait_for(lambda: running_workers < WORKERS and not queue.empty())
+                job_id = queue.get_nowait()
+                running_workers += 1
+                admitted = True
+        else:
+            job_id = await queue.get()
         proc = None
         spawn_task = None
         try:
@@ -212,9 +298,11 @@ async def worker():
             patch(job_id, state='running', started_at=time.time())
             directory = DATA / 'jobs' / job_id
             logfile = directory / 'worker.log'
+            runtime = read_spec(job_id).get('runtime') or runtime_snapshot(row['operation'])
+            timeout_seconds = runtime['timeout_seconds']
             command = [sys.executable, '--worker'] if getattr(sys, 'frozen', False) else [sys.executable, '-m', 'app.worker']
             with logfile.open('wb') as stream:
-                spawn_task = asyncio.create_task(asyncio.create_subprocess_exec(*command, str(directory), cwd=str(ROOT), stdout=stream, stderr=stream, start_new_session=os.name == 'posix', env={**os.environ, 'FORMAT_HUB_PARENT_PID': str(os.getpid())}))
+                spawn_task = asyncio.create_task(asyncio.create_subprocess_exec(*command, str(directory), cwd=str(ROOT), stdout=stream, stderr=stream, start_new_session=os.name == 'posix', env=worker_environment(runtime)))
                 proc = await asyncio.shield(spawn_task)
                 active[job_id] = proc
                 with db() as c:
@@ -223,7 +311,7 @@ async def worker():
                     terminate_process(proc)
                     await proc.wait()
                     continue
-                deadline = time.monotonic() + TIMEOUT
+                deadline = time.monotonic() + timeout_seconds
                 while proc.returncode is None:
                     try:
                         await asyncio.wait_for(asyncio.shield(proc.wait()), timeout=0.5)
@@ -231,7 +319,7 @@ async def worker():
                         if time.monotonic() > deadline:
                             terminate_process(proc)
                             await proc.wait()
-                            raise ValueError(f'转换超过 {TIMEOUT} 秒，已停止；请拆小文件重试')
+                            raise ValueError(f'转换超过 {timeout_seconds} 秒，已停止；请拆小文件重试')
                         if storage_used() > STORAGE_MB * 1024**2 or shutil.disk_usage(DATA).free < MIN_FREE_MB * 1024**2:
                             terminate_process(proc)
                             await proc.wait()
@@ -272,9 +360,15 @@ async def worker():
                 patch(job_id, state='failed', finished_at=time.time(), error=str(exc)[:500])
         finally:
             active.pop(job_id, None)
-            cleanup_ipc(DATA / 'jobs' / job_id)
-            release_slot(job_id)
-            queue.task_done()
+            try:
+                cleanup_ipc(DATA / 'jobs' / job_id)
+            finally:
+                release_slot(job_id)
+                queue.task_done()
+                if admitted:
+                    async with worker_condition:
+                        running_workers -= 1
+                        worker_condition.notify_all()
 
 
 def cleanup():
@@ -306,17 +400,36 @@ async def janitor():
 
 @asynccontextmanager
 async def lifespan(app):
-    global queue, slots
+    global queue, slots, settings_store, worker_condition, running_workers, admin_token
     initialize()
+    # Preserve existing deployment/test overrides as first-start defaults only.
+    defaults = environment_defaults().model_dump()
+    defaults.update(workers=WORKERS, timeout_seconds=TIMEOUT, retention_hours=RETENTION,
+                    max_file_mb=MAX_MB, max_files=MAX_FILES, queue_limit=QUEUE_LIMIT,
+                    storage_mb=STORAGE_MB, min_free_mb=MIN_FREE_MB)
+    previous = {key: globals()[key] for key in ('WORKERS', 'TIMEOUT', 'RETENTION', 'MAX_MB', 'MAX_FILES', 'QUEUE_LIMIT', 'STORAGE_MB', 'MIN_FREE_MB')}
+    settings_store = SettingsStore(DATA, Settings.model_validate(defaults))
+    apply_settings(settings_store.values)
+    admin_token = load_admin_token()
+    admin_sessions.clear()
+    admin_attempts.clear()
     cleanup()
     queue = asyncio.Queue()
     reserved_slots.clear()
-    slots = asyncio.Semaphore(QUEUE_LIMIT + WORKERS)
-    tasks = [asyncio.create_task(worker()) for _ in range(WORKERS)] + [asyncio.create_task(janitor())]
-    yield
-    for task in tasks:
-        task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
+    slots = Capacity(QUEUE_LIMIT + WORKERS)
+    worker_condition = asyncio.Condition()
+    running_workers = 0
+    tasks = [asyncio.create_task(worker()) for _ in range(32)] + [asyncio.create_task(janitor())]
+    try:
+        yield
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        worker_condition = None
+        settings_store = None
+        admin_sessions.clear()
+        globals().update(previous)
 
 
 app = FastAPI(title='格式工坊 API', version=VERSION, lifespan=lifespan)
@@ -363,7 +476,7 @@ async def boundaries(request, call_next):
         request.state.session_id = sid
     response = await call_next(request)
     if fresh:
-        response.set_cookie(COOKIE, sid, httponly=True, samesite='strict', secure=request.url.scheme == 'https', max_age=RETENTION * 3600 + 86400)
+        response.set_cookie(COOKIE, request.state.session_id, httponly=True, samesite='strict', secure=request.url.scheme == 'https', max_age=RETENTION * 3600 + 86400)
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['Referrer-Policy'] = 'same-origin'
     response.headers['Content-Security-Policy'] = "default-src 'self'; img-src 'self' blob: data:; style-src 'self'; script-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'"
@@ -410,6 +523,7 @@ def login(request: Request, body: Login):
     with db() as c:
         c.execute('UPDATE sessions SET id=?,authenticated=1 WHERE id=?', (new_id, row['id']))
         c.execute('UPDATE jobs SET owner=? WHERE owner=?', (new_id, row['id']))
+    request.state.session_id = new_id
     response = JSONResponse({'authenticated': True})
     response.set_cookie(COOKIE, new_id, httponly=True, samesite='strict', secure=request.url.scheme == 'https', max_age=RETENTION * 3600 + 86400)
     return response
@@ -427,6 +541,113 @@ def logout(request: Request):
 def get_catalog(request: Request):
     session(request)
     return {'tools': catalog(), 'limits': {'max_file_mb': MAX_MB, 'max_files': MAX_FILES, 'workers': WORKERS, 'retention_hours': RETENTION}, 'version': VERSION}
+
+
+def load_admin_token():
+    configured = os.environ.get('FORMAT_HUB_ADMIN_TOKEN', '')
+    if configured:
+        if TEAM_TOKEN and hmac.compare_digest(configured, TEAM_TOKEN):
+            raise ValueError('管理员口令必须独立于团队访问口令')
+        return configured
+    path = DATA / 'admin-token'
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        os.chmod(path, 0o600)
+        token = path.read_text(encoding='utf-8').strip()
+        if len(token) < 32:
+            raise ValueError('管理员口令文件内容无效')
+        return token
+    token = secrets.token_urlsafe(48)
+    with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+        stream.write(token + '\n')
+    return token
+
+
+def is_loopback(request):
+    # A local reverse proxy is also a loopback peer. Exempt only direct local
+    # access with a local Host, never requests carrying proxy provenance.
+    if any(key.lower() == 'forwarded' or key.lower().startswith('x-forwarded') or key.lower() == 'x-real-ip' for key in request.headers):
+        return False
+    try:
+        if not ipaddress.ip_address(request.client.host).is_loopback:
+            return False
+        host = request.url.hostname
+        return host == 'localhost' or ipaddress.ip_address(host).is_loopback
+    except (ValueError, AttributeError, TypeError):
+        return False
+
+
+def can_admin(request):
+    if is_loopback(request):
+        return True
+    with admin_lock:
+        item = admin_sessions.get(request.cookies.get(ADMIN_COOKIE, ''))
+        return bool(item and item[0] == request.state.session_id and item[1] > time.time())
+
+
+def settings_view(request):
+    with settings_store.lock:
+        values, revision = settings_store.values.model_dump(), settings_store.revision
+    memory_mb = None
+    try:
+        memory_mb = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES') // 1024**2
+    except (AttributeError, ValueError, OSError):
+        log.debug('host memory information unavailable')
+    editable = can_admin(request)
+    return {'values': values, 'revision': revision, 'fields': settings_fields(),
+            'can_edit': editable, 'needs_admin_login': not editable,
+            'host': {'cpu_count': os.cpu_count(), 'memory_mb': memory_mb}}
+
+
+@app.get('/api/settings')
+def get_settings(request: Request):
+    session(request)
+    return settings_view(request)
+
+
+@app.put('/api/settings')
+async def put_settings(request: Request, body: SettingsUpdate):
+    session(request)
+    if not can_admin(request):
+        raise Problem(403, 'admin_required', '请先验证独立管理员口令')
+    try:
+        values = settings_store.update(body)
+    except RevisionConflict:
+        raise Problem(409, 'settings_conflict', '配置已被其他页面修改，请重新加载后保存')
+    except ValidationError:
+        raise Problem(422, 'invalid_settings', '配置名称、整数类型或范围错误')
+    except OSError:
+        log.exception('settings persistence failed')
+        raise Problem(503, 'settings_unavailable', '配置保存失败，原配置保持有效')
+    apply_settings(values)
+    async with worker_condition:
+        worker_condition.notify_all()
+    return settings_view(request)
+
+
+@app.post('/api/admin/login')
+def admin_login(request: Request, body: Login):
+    session(request)
+    ip = request.client.host if request.client else 'unknown'
+    now = time.time()
+    with admin_lock:
+        attempts = [t for t in admin_attempts.get(ip, []) if t > now - 60]
+        if len(attempts) >= 10:
+            raise Problem(429, 'rate_limited', '尝试次数较多，请一分钟后重试')
+        admin_attempts[ip] = attempts + [now]
+        if not hmac.compare_digest(hashlib.sha256(body.token.encode()).digest(), hashlib.sha256(admin_token.encode()).digest()):
+            raise Problem(403, 'wrong_admin_token', '管理员口令错误')
+        expired = [key for key, item in admin_sessions.items() if item[1] <= now]
+        for key in expired:
+            del admin_sessions[key]
+        previous = request.cookies.get(ADMIN_COOKIE)
+        admin_sessions.pop(previous, None)
+        token = secrets.token_urlsafe(32)
+        admin_sessions[token] = (request.state.session_id, now + 8 * 3600)
+    response = JSONResponse({'authenticated': True})
+    response.set_cookie(ADMIN_COOKIE, token, httponly=True, samesite='strict', secure=request.url.scheme == 'https', max_age=8 * 3600)
+    return response
 
 
 @app.get('/api/jobs')
@@ -511,6 +732,7 @@ async def create_job(request: Request):
     job_id = secrets.token_hex(16)
     directory = DATA / 'jobs' / job_id
     accepted = False
+    batch_job_ids = [job_id]
     reserved_slots.add(job_id)
     try:
         async with parse_upload(request) as form:
@@ -530,14 +752,32 @@ async def create_job(request: Request):
                 raise Problem(422, 'invalid_options', '转换参数应为对象且长度小于16KB')
             if any(key.startswith('_') for key in options):
                 raise Problem(422, 'private_option', '包含不允许的内部参数')
+            batch_mode = options.pop('batch_mode', 'separate' if operation == 'cad_convert' else 'combined')
+            if batch_mode not in ('separate', 'combined'):
+                raise Problem(422, 'invalid_batch_mode', '批次模式应为 separate 或 combined')
             font_uploads = form.getlist('fonts')
             if font_uploads and (operation != 'cad_convert' or len(font_uploads) > 20):
                 raise Problem(422, 'invalid_fonts', 'CAD 字库最多选择20个字体文件')
             uploads = form.getlist('files')
             if not uploads or len(uploads) > MAX_FILES or any(not hasattr(u, 'read') for u in uploads):
                 raise Problem(422, 'invalid_files', f'请选择1至{MAX_FILES}个文件')
-            if not tool['multiple'] and len(uploads) != 1:
+            separate = batch_mode == 'separate'
+            if not tool['multiple'] and len(uploads) != 1 and not separate:
                 raise Problem(422, 'single_file', '此工具每次处理一个文件')
+            count = len(uploads) if separate else 1
+            if count > 1:
+                if isinstance(slots, Capacity):
+                    slots.reserve(count - 1)
+                else:
+                    # Legacy direct worker tests use a semaphore rather than lifespan admission.
+                    if slots._value < count - 1:
+                        raise Problem(429, 'queue_full', '整批任务超过剩余队列容量，请稍后提交')
+                    for _ in range(count - 1):
+                        await slots.acquire()
+                for _ in range(count - 1):
+                    child = secrets.token_hex(16)
+                    batch_job_ids.append(child)
+                    reserved_slots.add(child)
             directory.mkdir(parents=True)
             (directory / 'input').mkdir()
             (directory / 'output').mkdir()
@@ -589,18 +829,44 @@ async def create_job(request: Request):
                     valid = signature[:4] in {b'\x00\x01\x00\x00', b'OTTO', b'ttcf', b'true'} if suffix != '.shx' else signature.startswith(b'AutoCAD-86 ')
                     if not valid:
                         raise Problem(422, 'invalid_font', '字体内容与格式不符')
-            spec = {'operation': operation, 'files': [f['stored'] for f in files], 'file_metadata': files, 'options': options}
-            (directory / 'spec.json').write_text(json.dumps(spec, ensure_ascii=False), encoding='utf-8')
+            runtime = runtime_snapshot(operation)
+            batch_id = secrets.token_hex(16)
+            child_files = []
+            for index, child in enumerate(batch_job_ids):
+                target = DATA / 'jobs' / child
+                selected = [files[index]] if separate else files
+                if index:
+                    (target / 'input').mkdir(parents=True)
+                    (target / 'output').mkdir()
+                    shutil.move(str(directory / 'input' / selected[0]['stored']), target / 'input' / selected[0]['stored'])
+                    if (directory / 'fonts').exists():
+                        shutil.copytree(directory / 'fonts', target / 'fonts')
+                spec = {'operation': operation, 'files': [f['stored'] for f in selected], 'file_metadata': selected,
+                        'options': options, 'runtime': runtime, 'batch_id': batch_id}
+                (target / 'spec.json').write_text(json.dumps(spec, ensure_ascii=False), encoding='utf-8')
+                child_files.append(selected)
+            if storage_used() > STORAGE_MB * 1024**2 or shutil.disk_usage(DATA).free < MIN_FREE_MB * 1024**2:
+                raise Problem(413, 'storage_full', '整批任务与字库超过磁盘预算，请减少文件')
+            # No await between the single DB transaction and publication: workers see
+            # either every accepted child or none, never a partially validated batch.
             with db() as c:
-                c.execute('INSERT INTO jobs(id,owner,operation,tool_name,state,created_at,files,options) VALUES (?,?,?,?,?,?,?,?)', (job_id, owner, operation, tool['name'], 'queued', time.time(), json.dumps(files, ensure_ascii=False), json.dumps(options, ensure_ascii=False)))
-            queue.put_nowait(job_id)
+                for child, selected in zip(batch_job_ids, child_files):
+                    c.execute('INSERT INTO jobs(id,owner,operation,tool_name,state,created_at,files,options) VALUES (?,?,?,?,?,?,?,?)',
+                              (child, owner, operation, tool['name'], 'queued', time.time(), json.dumps(selected, ensure_ascii=False), json.dumps(options, ensure_ascii=False)))
+            for child in batch_job_ids:
+                queue.put_nowait(child)
             accepted = True
+            if worker_condition is not None:
+                async with worker_condition:
+                    worker_condition.notify_all()
             with db() as c:
-                return view(c.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone())
+                jobs = [view(c.execute('SELECT * FROM jobs WHERE id=?', (child,)).fetchone()) for child in batch_job_ids]
+            return {**jobs[0], 'jobs': jobs, 'batch_id': batch_id}
     finally:
         if not accepted:
-            release_slot(job_id)
-            remove_job_files(job_id)
+            for child in batch_job_ids:
+                release_slot(child)
+                remove_job_files(child)
 
 
 @app.post('/api/jobs/{job_id}/cancel')
