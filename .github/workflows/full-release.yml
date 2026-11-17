@@ -38,8 +38,8 @@ jobs:
         env:
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          import os,re
-          from app.version import VERSION
+          import os,re,runpy
+          VERSION=runpy.run_path('app/version.py')['VERSION']
           requested=os.environ['RELEASE_VERSION']
           assert re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+',requested),requested
           assert VERSION==requested,(VERSION,requested)
