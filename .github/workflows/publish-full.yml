@@ -1,39 +1,58 @@
-name: Upload verified full release to v1.2.0 draft
+name: Upload verified full release to draft
 on:
   workflow_dispatch:
     inputs:
       run_id:
         description: Successful full-release build run ID
         required: true
+        type: string
+      release_id:
+        description: Actual existing draft release ID from GitHub API
+        required: true
+        type: string
+      version:
+        description: Application version (without v prefix)
+        required: true
+        default: '1.3.0'
+        type: string
 permissions:
   actions: read
   contents: write
 jobs:
   publish:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      BUILD_RUN_ID: ${{ inputs.run_id }}
+      RELEASE_ID: ${{ inputs.release_id }}
+      RELEASE_VERSION: ${{ inputs.version }}
     steps:
-      - name: Require successful upstream workflow and draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BUILD_RUN_ID: ${{ inputs.run_id }}
+      - name: Require successful upstream workflow and actual draft release
         run: |
+          set -euo pipefail
           [[ "$BUILD_RUN_ID" =~ ^[0-9]+$ ]]
-          gh api "repos/${{ github.repository }}/actions/runs/$BUILD_RUN_ID" > /tmp/build.json
-          gh api "repos/${{ github.repository }}/releases/446776176" > /tmp/release.json
+          [[ "$RELEASE_ID" =~ ^[0-9]+$ ]]
+          gh api "repos/$GH_REPO/actions/runs/$BUILD_RUN_ID" > /tmp/build.json
+          gh api "repos/$GH_REPO/releases/$RELEASE_ID" > /tmp/release.json
           python - <<'PY'
-          import json
+          import json,os,re
           run=json.load(open('/tmp/build.json'))
           release=json.load(open('/tmp/release.json'))
+          version=os.environ['RELEASE_VERSION']
+          assert re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+',version),version
           assert run['conclusion']=='success' and run['status']=='completed'
-          assert run['path']=='.github/workflows/full-release.yml'
+          assert run['event']=='workflow_dispatch' and run['path']=='.github/workflows/full-release.yml'
           assert run['head_branch']=='main'
-          assert run['repository']['full_name']==run['head_repository']['full_name']=='${{ github.repository }}'
-          assert release['id']==446776176 and release['draft'] and release['tag_name']=='v1.2.0'
-          print('Verified build',run['id'],run['head_sha'],'draft',release['id'])
+          assert run['repository']['full_name']==run['head_repository']['full_name']==os.environ['GH_REPO']
+          assert release['id']==int(os.environ['RELEASE_ID']) and release['draft']
+          assert release['tag_name']=='v'+version or release['tag_name'].startswith('untagged-'),release
+          assert re.search(r'(?<![0-9.])v'+re.escape(version)+r'(?![0-9.])',release['name']),release
+          print('Verified build',run['id'],run['head_sha'],'draft',release['id'],release['tag_name'])
           PY
       - uses: actions/download-artifact@v4
         with:
-          pattern: format-hub-full-*-v1.2.0
+          pattern: format-hub-full-*-v${{ inputs.version }}
           run-id: ${{ inputs.run_id }}
           github-token: ${{ github.token }}
           path: release
@@ -41,20 +60,24 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-          import hashlib,json
+          import hashlib,json,os
           root=Path('release')
           build=json.load(open('/tmp/build.json'))
           expected={('windows','x64'),('macos','arm64'),('macos','x64')}
           seen=set()
+          assets=[]
           for smoke in root.rglob('full-smoke-*.json'):
               data=json.loads(smoke.read_text())
               release=data['release']
               key=(release['platform'],release['architecture'])
               assert key in expected and key not in seen
               seen.add(key)
-              assert release['version']=='1.2.0' and release['office_bundled']
+              assert release['version']==os.environ['RELEASE_VERSION'] and release['office_bundled']
               assert release['build_commit']==build['head_sha'] and data['offline']
               assert any(c.get('offline_download_rejected') for c in data['checks'])
+              assert any(c.get('settings_hot_updated') and c.get('values')=={'workers':4,'timeout_seconds':1800,'cad_timeout_seconds':7200,'media_threads':4} for c in data['checks'])
+              assert any(c.get('settings_persisted_after_restart') for c in data['checks'])
+              assert any(c.get('cad_separate_jobs')==2 and c.get('timeout_seconds')==[7200,7200] and c.get('snapshot_after_settings_change') for c in data['checks'])
               operations={c.get('operation'):c for c in data['checks'] if 'operation' in c}
               for name in ['image_convert','svg_convert','cad_convert','office_convert','media_audio']:
                   assert operations[name]['state']=='succeeded' and operations[name]['bytes']>0
@@ -62,14 +85,14 @@ jobs:
               digest=hashlib.file_digest(archive.open('rb'),'sha256').hexdigest()
               assert digest==data['archive']['sha256']==archive.with_suffix('.sha256').read_text().split()[0]
               assert archive.stat().st_size==data['archive']['bytes']
+              assets.extend([archive,archive.with_suffix('.sha256'),smoke])
               print('Verified',key,archive.name,archive.stat().st_size,digest)
           assert seen==expected,(seen,expected)
           assert len(list(root.rglob('*.zip')))==3
+          assert len({p.name for p in assets})==len(assets)
+          json.dump([{'path':str(p),'name':p.name,'bytes':p.stat().st_size,'sha256':hashlib.file_digest(p.open('rb'),'sha256').hexdigest()} for p in assets],open('/tmp/assets.json','w'))
           PY
       - name: Bind immutable release tag to verified build commit
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
         run: |
           python - <<'PY'
           import json,os,subprocess
@@ -77,22 +100,45 @@ jobs:
           def api(path,*args):
               result=subprocess.run(['gh','api',path,*args],text=True,capture_output=True,check=True)
               return json.loads(result.stdout)
-          refs=api('repos/'+os.environ['GH_REPO']+'/git/matching-refs/tags/v1.2.0')
-          exact=[ref for ref in refs if ref['ref']=='refs/tags/v1.2.0']
+          base='repos/'+os.environ['GH_REPO']
+          tag='v'+os.environ['RELEASE_VERSION']
+          refs=api(base+'/git/matching-refs/tags/'+tag)
+          exact=[ref for ref in refs if ref['ref']=='refs/tags/'+tag]
           assert len(exact)<=1
           if exact:
               obj=exact[0]['object']
               while obj['type']=='tag':
-                  obj=api('repos/'+os.environ['GH_REPO']+'/git/tags/'+obj['sha'])['object']
+                  obj=api(base+'/git/tags/'+obj['sha'])['object']
               assert obj['type']=='commit' and obj['sha']==build['head_sha'],obj
           else:
-              ref=api('repos/'+os.environ['GH_REPO']+'/git/refs','--method','POST','-f','ref=refs/tags/v1.2.0','-f','sha='+build['head_sha'])
+              ref=api(base+'/git/refs','--method','POST','-f','ref=refs/tags/'+tag,'-f','sha='+build['head_sha'])
               assert ref['object']['sha']==build['head_sha']
-          print('Release tag matches verified build',build['head_sha'])
+          release=api(base+'/releases/'+os.environ['RELEASE_ID'])
+          assert release['draft'] and (release['tag_name']==tag or release['tag_name'].startswith('untagged-')),release
+          release=api(base+'/releases/'+os.environ['RELEASE_ID'],'--method','PATCH','-f','tag_name='+tag,'-f','target_commitish='+build['head_sha'],'-F','draft=true')
+          assert release['draft'] and release['tag_name']==tag and release['target_commitish']==build['head_sha'],release
+          print('Release tag matches verified build',tag,build['head_sha'],'draft',release['id'])
           PY
-      - name: Upload to existing draft without changing publication state
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Upload to actual draft ID and verify remote size and SHA256
         run: |
-          mapfile -d '' files < <(find release -type f \( -name '*.zip' -o -name '*.sha256' -o -name 'full-smoke-*.json' \) -print0)
-          gh release upload v1.2.0 "${files[@]}" --repo "${{ github.repository }}"
+          python - <<'PY'
+          import json,os,subprocess,urllib.parse
+          def api(path,*args):
+              result=subprocess.run(['gh','api',path,*args],text=True,capture_output=True,check=True)
+              return json.loads(result.stdout)
+          base='repos/'+os.environ['GH_REPO']+'/releases/'+os.environ['RELEASE_ID']
+          release=api(base)
+          assert release['draft'] and release['tag_name']=='v'+os.environ['RELEASE_VERSION']
+          existing={asset['name']:asset for asset in api(base+'/assets','--paginate')}
+          for asset in json.load(open('/tmp/assets.json')):
+              remote=existing.get(asset['name'])
+              if remote is None:
+                  url='https://uploads.github.com/'+base+'/assets?name='+urllib.parse.quote(asset['name'],safe='')
+                  remote=api(url,'--method','POST','-H','Content-Type: application/octet-stream','--input',asset['path'])
+              assert remote['state']=='uploaded' and remote['size']==asset['bytes'],remote
+              assert remote['digest']=='sha256:'+asset['sha256'],remote
+              print('Draft asset verified',remote['id'],asset['name'],remote['size'],remote['digest'])
+          release=api(base)
+          assert release['draft'] and release['tag_name']=='v'+os.environ['RELEASE_VERSION']
+          print('Kept release as draft',release['id'])
+          PY

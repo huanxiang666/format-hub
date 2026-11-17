@@ -15,6 +15,60 @@ import httpx
 from PIL import Image
 
 
+SETTINGS_VALUES = {'workers': 4, 'timeout_seconds': 1800, 'cad_timeout_seconds': 7200, 'media_threads': 4}
+
+
+def stop_server(process):
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=15)
+
+
+def wait_ready(client, process, log):
+    for _ in range(150):
+        if process.poll() is not None:
+            raise RuntimeError('成品服务提前退出：' + log.read_text(errors='replace'))
+        try:
+            response = client.get('/api/health')
+            if response.status_code == 200:
+                return response.json()
+        except httpx.ConnectError:
+            pass
+        time.sleep(0.2)
+    raise RuntimeError('成品服务未就绪：' + log.read_text(errors='replace'))
+
+
+def settings_document(client):
+    response = client.get('/api/settings')
+    response.raise_for_status()
+    document = response.json()
+    assert {'values', 'revision', 'fields', 'can_edit', 'needs_admin_login', 'host'} <= document.keys(), document
+    assert document['can_edit'] is True and document['needs_admin_login'] is False, document
+    assert type(document['revision']) is int, document
+    assert document['fields'] and 'memory_mb' in document['host'], document
+    memory_mb = document['host']['memory_mb']
+    assert memory_mb is None or (type(memory_mb) is int and memory_mb > 0), document
+    return document
+
+
+def update_settings(client, report):
+    before = settings_document(client)
+    response = client.put('/api/settings', json={'values': SETTINGS_VALUES, 'revision': before['revision']})
+    response.raise_for_status()
+    after = settings_document(client)
+    assert all(after['values'][key] == value for key, value in SETTINGS_VALUES.items()), after
+    assert after['revision'] > before['revision'], (before, after)
+    health = client.get('/api/health')
+    health.raise_for_status()
+    assert health.json()['workers'] == SETTINGS_VALUES['workers'], health.text
+    report['checks'].append({'settings_hot_updated': True, 'values': SETTINGS_VALUES, 'revision': after['revision'], 'can_edit': after['can_edit']})
+    return after
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('binary', type=Path)
@@ -32,18 +86,20 @@ def main():
         assert not binary.is_relative_to(archive.parent), 'Smoke binary must come from separately extracted attachment'
     release = json.loads((binary.parent / 'release-manifest.json').read_text(encoding='utf-8'))
     report['release'] = {key: release.get(key) for key in ('version', 'platform', 'architecture', 'build_commit', 'office_bundled')}
-    env = {k: v for k, v in os.environ.items() if k not in ('FORMAT_HUB_TOKEN', 'SOFFICE', 'DWG2DXF', 'FFMPEG', 'FORMAT_HUB_DATA') and not k.startswith(('DYLD_', 'LD_LIBRARY_PATH'))}
+    env = {k: v for k, v in os.environ.items() if k not in ('SOFFICE', 'DWG2DXF', 'FFMPEG') and not k.startswith(('FORMAT_HUB_', 'DYLD_', 'LD_LIBRARY_PATH'))}
     if args.offline:
         env['FORMAT_HUB_OFFLINE'] = '1'
         env['PATH'] = os.environ.get('SystemRoot', 'C:\\Windows') + '\\System32' if os.name == 'nt' else '/usr/bin:/bin:/usr/sbin:/sbin'
         env['HTTP_PROXY'] = env['HTTPS_PROXY'] = env['ALL_PROXY'] = 'http://127.0.0.1:9'
         env['NO_PROXY'] = '127.0.0.1,localhost'
-        check = subprocess.run([str(binary), '--offline', '--install-engine', 'windows-office'], env=env, capture_output=True, text=True, timeout=20)
-        assert check.returncode != 0 and ('离线' in check.stderr or 'offline' in check.stderr.lower()), check.stderr
-        report['checks'].append({'offline_download_rejected': True})
     with tempfile.TemporaryDirectory(prefix='format-hub-release-smoke-') as temporary:
         temporary = Path(temporary)
-        help_result = subprocess.run([str(binary), '--help'], cwd=temporary, capture_output=True, text=True, errors='replace', timeout=20, check=False)
+        env['FORMAT_HUB_DATA'] = str(temporary / 'data')
+        if args.offline:
+            check = subprocess.run([str(binary), '--offline', '--data-dir', env['FORMAT_HUB_DATA'], '--install-engine', 'windows-office'], cwd=temporary, env=env, capture_output=True, text=True, timeout=20)
+            assert check.returncode != 0 and ('离线' in check.stderr or 'offline' in check.stderr.lower()), check.stderr
+            report['checks'].append({'offline_download_rejected': True})
+        help_result = subprocess.run([str(binary), '--help'], cwd=temporary, env=env, capture_output=True, text=True, errors='replace', timeout=20, check=False)
         if help_result.returncode:
             raise RuntimeError(f'Frozen --help exited {help_result.returncode}\nstdout:\n{help_result.stdout}\nstderr:\n{help_result.stderr}')
         assert '--port' in help_result.stdout
@@ -67,20 +123,9 @@ def main():
             process = subprocess.Popen([str(binary), *offline_flags, '--host', '127.0.0.1', '--port', str(port), '--data-dir', str(temporary / 'data')], cwd=temporary, env=env, stdout=stream, stderr=stream)
             try:
                 with httpx.Client(base_url=f'http://127.0.0.1:{port}', timeout=30) as client:
-                    for i in range(150):
-                        if process.poll() is not None:
-                            raise RuntimeError('成品服务提前退出：' + log.read_text(errors='replace'))
-                        try:
-                            response = client.get('/api/health')
-                            if response.status_code == 200:
-                                break
-                        except httpx.ConnectError:
-                            pass
-                        time.sleep(0.2)
-                    else:
-                        raise RuntimeError('成品服务未就绪：' + log.read_text(errors='replace'))
-                    health = response.json()
+                    health = wait_ready(client, process, log)
                     report['checks'].append({'health': health})
+                    updated_settings = update_settings(client, report)
                     response = client.get('/')
                     response.raise_for_status()
                     assert '<html' in response.text.lower()
@@ -107,17 +152,48 @@ def main():
                         wav.setnchannels(1); wav.setsampwidth(2); wav.setframerate(8000); wav.writeframes(b'\0\0' * 800)
                     samples.append(('media_audio', 'sample.wav', audio.getvalue(), {'target': 'mp3'}))
                     for operation, filename, content, options in samples:
-                        response = client.post('/api/jobs', data={'operation': operation, 'options': json.dumps(options)}, files={'files': (filename, content)})
+                        files = [('files', (filename, content))]
+                        if operation == 'cad_convert':
+                            files.append(('files', ('second.dxf', content)))
+                        response = client.post('/api/jobs', data={'operation': operation, 'options': json.dumps(options)}, files=files)
                         if response.is_error:
                             raise RuntimeError(f'{operation}: HTTP {response.status_code}: {response.text}; catalog={report["catalog"]}')
-                        job_id = response.json()['id']
+                        submission = response.json()
+                        job_id = submission['id']
+                        if operation == 'cad_convert':
+                            cad_jobs = submission['jobs']
+                            cad_ids = {row['id'] for row in cad_jobs}
+                            assert len(cad_jobs) == len(cad_ids) == 2 and job_id in cad_ids, submission
+                            assert submission['batch_id'] and all(row['batch_id'] == submission['batch_id'] for row in cad_jobs), submission
+                            assert all(row['timeout_seconds'] == SETTINGS_VALUES['cad_timeout_seconds'] for row in cad_jobs), submission
+                            response = client.put('/api/settings', json={'values': {'cad_timeout_seconds': 7300, 'media_threads': 3}, 'revision': updated_settings['revision']})
+                            response.raise_for_status()
+                            changed = settings_document(client)
+                            assert changed['values']['cad_timeout_seconds'] == 7300 and changed['values']['media_threads'] == 3, changed
+                            response = client.get('/api/jobs'); response.raise_for_status()
+                            snapshot_rows = response.json()
+                            if isinstance(snapshot_rows, dict):
+                                snapshot_rows = snapshot_rows['jobs']
+                            snapshots = [row for row in snapshot_rows if row['id'] in cad_ids]
+                            assert len(snapshots) == 2 and all(row['timeout_seconds'] == 7200 for row in snapshots), snapshots
+                            response = client.put('/api/settings', json={'values': SETTINGS_VALUES, 'revision': changed['revision']})
+                            response.raise_for_status()
+                            updated_settings = settings_document(client)
+                            assert all(updated_settings['values'][key] == value for key, value in SETTINGS_VALUES.items()), updated_settings
+                            report['checks'].append({'cad_separate_jobs': len(cad_jobs), 'job_ids': sorted(cad_ids), 'batch_id': submission['batch_id'], 'timeout_seconds': [row['timeout_seconds'] for row in snapshots], 'snapshot_after_settings_change': True})
                         for i in range(300):
                             response = client.get('/api/jobs'); response.raise_for_status()
                             rows = response.json()
                             if isinstance(rows, dict):
                                 rows = rows.get('jobs', [])
-                            job = next(row for row in rows if row['id'] == job_id)
-                            if job['state'] in ('failed', 'cancelled'):
+                            expected_ids = cad_ids if operation == 'cad_convert' else {job_id}
+                            jobs = [row for row in rows if row['id'] in expected_ids]
+                            assert len(jobs) == len(expected_ids), (expected_ids, rows)
+                            job = next(row for row in jobs if row['id'] == job_id)
+                            failed = next((row for row in jobs if row['state'] in ('failed', 'cancelled')), None)
+                            if failed:
+                                job = failed
+                                job_id = job['id']
                                 details = []
                                 job_dir = temporary / 'data/jobs' / job_id
                                 for diagnostic in sorted(job_dir.glob('*.log')):
@@ -127,11 +203,17 @@ def main():
                                         args.report.parent.mkdir(parents=True, exist_ok=True)
                                         args.report.with_name('windows-worker-' + job_id + '-' + diagnostic.name).write_text(text, encoding='utf-8')
                                 raise RuntimeError(json.dumps(job, ensure_ascii=False) + '\n' + log.read_text(errors='replace') + '\n' + '\n'.join(details))
-                            if job['state'] == 'succeeded':
+                            expected_timeout = SETTINGS_VALUES['cad_timeout_seconds' if operation == 'cad_convert' else 'timeout_seconds']
+                            assert all(row['timeout_seconds'] == expected_timeout for row in jobs), jobs
+                            if all(row['state'] == 'succeeded' for row in jobs):
                                 break
                             time.sleep(0.2)
                         else:
                             raise RuntimeError('转换超时：' + operation)
+                        for completed_job in jobs:
+                            spec = json.loads((temporary / 'data/jobs' / completed_job['id'] / 'spec.json').read_text(encoding='utf-8'))
+                            assert spec['runtime']['timeout_seconds'] == expected_timeout, spec
+                            assert spec['runtime']['media_threads'] == SETTINGS_VALUES['media_threads'], spec
                         assert job['outputs']
                         result = client.get(job['outputs'][0]['url']); result.raise_for_status()
                         assert result.content
@@ -145,13 +227,23 @@ def main():
                             assert result.content.startswith(b'%PDF')
                         elif operation == 'cad_convert':
                             assert b'<svg' in result.content
-                        report['checks'].append({'operation': operation, 'state': job['state'], 'bytes': len(result.content)})
+                            for cad_job in jobs:
+                                assert len(cad_job['files']) == 1 and cad_job['outputs'], cad_job
+                                output = client.get(cad_job['outputs'][0]['url'])
+                                output.raise_for_status()
+                                assert b'<svg' in output.content
+                        report['checks'].append({'operation': operation, 'state': job['state'], 'bytes': len(result.content), 'timeout_seconds': job['timeout_seconds']})
+                    stop_server(process)
+                    process = subprocess.Popen([str(binary), *offline_flags, '--host', '127.0.0.1', '--port', str(port), '--data-dir', str(temporary / 'data')], cwd=temporary, env=env, stdout=stream, stderr=stream)
+                    with httpx.Client(base_url=f'http://127.0.0.1:{port}', timeout=30) as restarted_client:
+                        restarted_health = wait_ready(restarted_client, process, log)
+                        persisted = settings_document(restarted_client)
+                    assert persisted['revision'] == updated_settings['revision'], (updated_settings, persisted)
+                    assert persisted['values'] == updated_settings['values'], (updated_settings, persisted)
+                    assert restarted_health['workers'] == SETTINGS_VALUES['workers'], restarted_health
+                    report['checks'].append({'settings_persisted_after_restart': True, 'revision': persisted['revision'], 'values': SETTINGS_VALUES})
             finally:
-                process.terminate()
-                try:
-                    process.wait(timeout=15)
-                except subprocess.TimeoutExpired:
-                    process.kill(); process.wait()
+                stop_server(process)
         report['server_log'] = log.read_text(errors='replace')
     if args.report:
         args.report.resolve().write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')

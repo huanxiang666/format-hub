@@ -34,7 +34,7 @@
   </svg>
   <header class="topbar">
     <a class="brand" href="/" aria-label="格式工坊首页"><span class="brand-mark" aria-hidden="true"><span></span><span></span></span><span>格式工坊<small>团队文件转换工作台</small></span></a>
-    <div class="topbar-right"><span class="environment"><span class="status-dot" id="health-dot"></span><span id="health-text">正在连接服务</span></span><button class="button button-quiet" id="session-button" hidden>退出登录</button><a class="queue-shortcut" href="#queue-panel"><svg><use href="#i-clock"/></svg><span>任务队列</span><span class="queue-count" id="header-active-count">0</span></a></div>
+    <div class="topbar-right"><span class="environment"><span class="status-dot" id="health-dot"></span><span id="health-text">正在连接服务</span></span><button class="button button-quiet" id="settings-button" type="button" aria-haspopup="dialog" aria-controls="settings-dialog">运行设置</button><button class="button button-quiet" id="session-button" hidden>退出登录</button><a class="queue-shortcut" href="#queue-panel"><svg><use href="#i-clock"/></svg><span>任务队列</span><span class="queue-count" id="header-active-count">0</span></a></div>
   </header>
   <div class="app-layout">
     <aside class="sidebar" aria-label="工具导航">
@@ -67,6 +67,7 @@
               <div class="settings-grid"><label class="field" id="target-field"><span>目标格式</span><select id="target-format" name="target" required></select></label><div id="tool-options" class="options-grid"></div></div>
               <div id="pdf-note" class="info-note" hidden><svg aria-hidden="true"><use href="#i-info"/></svg><p><strong>先确认 PDF 的内容类型</strong><br>可选中文字的 PDF 更适合转为可编辑文档；扫描件、图片型 PDF 需要 OCR 识别，普通文档转换不会自动识别图片中的文字。复杂版式请在转换后复核。</p></div>
               <div class="submit-bar"><div><strong id="submit-summary">添加文件后即可开始</strong><span id="submit-help">转换会在后台运行，可继续处理其他文件。</span></div><button class="button button-primary" id="convert-button" type="submit" disabled><span id="convert-label">开始转换</span><svg aria-hidden="true"><use href="#i-arrow"/></svg></button></div>
+              <p id="batch-status" class="batch-message" role="status" hidden></p>
               <p id="submit-error" class="field-error" role="alert" hidden></p>
             </form>
           </section>
@@ -76,6 +77,15 @@
       </div>
     </main>
   </div>
+  <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title" aria-describedby="settings-intro">
+    <div class="settings-heading"><div><p class="page-kicker">转换服务配置</p><h2 id="settings-title">运行设置</h2></div><button id="settings-close" type="button" class="icon-button" aria-label="关闭运行设置"><svg aria-hidden="true"><use href="#i-close"/></svg></button></div>
+    <p id="settings-intro" class="settings-intro">并发数指同时转换的文件任务数，不会加速单个 CAD 文件。每个 CAD 文件独立任务、按并发数处理。</p>
+    <p id="settings-runtime" class="settings-runtime" role="status">正在读取运行信息…</p>
+    <p class="editor-help">普通任务与 CAD 分别设置每个任务的秒数上限；CAD 默认 3600 秒，可按图纸复杂度调整。增加媒体线程会提高 CPU / 内存占用，请结合主机资源设置。</p>
+    <p id="settings-message" class="settings-message" role="status" aria-live="polite" hidden></p>
+    <form id="admin-login-form" class="admin-login" hidden><label class="field" for="admin-token"><span>管理员凭证</span><input id="admin-token" name="token" type="password" autocomplete="off" required aria-describedby="admin-login-help"></label><p id="admin-login-help" class="editor-help">团队登录后，使用管理员凭证解锁配置；凭证仅用于本次请求。</p><button id="admin-login-submit" class="button button-secondary" type="submit">解锁设置</button></form>
+    <form id="settings-form"><fieldset id="settings-fields" class="runtime-settings-grid" disabled></fieldset><div class="settings-actions"><span id="settings-dirty" class="editor-help">正在读取设置…</span><div><button id="settings-reload" class="button button-secondary" type="button">重新载入</button><button id="settings-save" class="button button-primary" type="submit" disabled>保存并生效</button></div></div></form>
+  </dialog>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <noscript><div class="noscript">格式工坊需要 JavaScript 才能上传文件和查看任务，请在浏览器设置中启用。</div></noscript>
 </body>
